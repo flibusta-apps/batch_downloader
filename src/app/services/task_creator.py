@@ -27,6 +27,8 @@ class TaskCreator:
                 books_getter = LibraryClient.get_sequence_books
             case ObjectType.AUTHOR:
                 books_getter = LibraryClient.get_author_books
+            case ObjectType.TRANSLATOR:
+                books_getter = LibraryClient.get_translator_books
 
         while current_page <= pages_count:
             book_page = await books_getter(object_id, allowed_langs, page=current_page)

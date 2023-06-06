@@ -17,6 +17,11 @@ class AuthorBook(BaseModel):
     available_types: list[str]
 
 
+class TranslatorBook(BaseModel):
+    id: int
+    available_types: list[str]
+
+
 Item = TypeVar("Item", bound=BaseModel)
 
 
@@ -80,6 +85,26 @@ class LibraryClient:
                 return None
 
             return Page[AuthorBook].parse_raw(response.text)
+
+    @staticmethod
+    async def get_translator_books(
+        translator_id: int, allowed_langs: list[str], page: int = 1
+    ) -> Page[TranslatorBook] | None:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{env_config.LIBRARY_URL}/api/v1/translators/{translator_id}/books",
+                params={
+                    "page": page,
+                    "allowed_langs": allowed_langs,
+                    "is_deleted": "false",
+                },
+                headers={"Authorization": env_config.LIBRARY_API_KEY},
+            )
+
+            if response.status_code != 200:
+                return None
+
+            return Page[TranslatorBook].parse_raw(response.text)
 
     @staticmethod
     async def get_sequence(sequence_id: int) -> Sequence | None:

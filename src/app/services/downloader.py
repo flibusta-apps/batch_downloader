@@ -148,7 +148,7 @@ async def create_archive(task_id: uuid.UUID, redis: Redis = TaskiqDepends(get_re
             item = await LibraryClient.get_sequence(task.object_id)
             assert item
             name = item.name
-        case ObjectType.AUTHOR:
+        case ObjectType.AUTHOR | ObjectType.TRANSLATOR:
             item = await LibraryClient.get_author(task.object_id)
             assert item
             names = [item.first_name, item.last_name, item.middle_name]

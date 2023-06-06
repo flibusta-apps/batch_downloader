@@ -14,6 +14,7 @@ class TaskStatusEnum(enum.StrEnum):
 class ObjectType(enum.StrEnum):
     SEQUENCE = "sequence"
     AUTHOR = "author"
+    TRANSLATOR = "translator"
 
 
 class Task(BaseModel):
