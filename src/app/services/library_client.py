@@ -48,7 +48,11 @@ class LibraryClient:
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"{env_config.LIBRARY_URL}/api/v1/sequences/{sequence_id}/books",
-                params={"page": page, "allowed_langs": allowed_langs},
+                params={
+                    "page": page,
+                    "allowed_langs": allowed_langs,
+                    "is_deleted": "false",
+                },
                 headers={"Authorization": env_config.LIBRARY_API_KEY},
             )
 
@@ -64,7 +68,11 @@ class LibraryClient:
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"{env_config.LIBRARY_URL}/api/v1/authors/{author_id}/books",
-                params={"page": page, "allowed_langs": allowed_langs},
+                params={
+                    "page": page,
+                    "allowed_langs": allowed_langs,
+                    "is_deleted": "false",
+                },
                 headers={"Authorization": env_config.LIBRARY_API_KEY},
             )
 
