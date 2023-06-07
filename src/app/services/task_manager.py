@@ -23,6 +23,7 @@ class Task(BaseModel):
     object_type: ObjectType
     subtasks: list[str]
     status: TaskStatusEnum = TaskStatusEnum.IN_PROGRESS
+    result_filename: str | None = None
     result_link: str | None = None
 
 
