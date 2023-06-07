@@ -133,6 +133,8 @@ async def check_subtasks(task_id: uuid.UUID, redis: Redis = TaskiqDepends(get_re
     if task is None:
         return False
 
+    await asyncio.sleep(1)
+
     is_subtasks_ready = await _check_subtasks(task.subtasks)
     if is_subtasks_ready:
         await create_archive.kiq(task_id)
