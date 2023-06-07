@@ -38,7 +38,7 @@ class TaskCreator:
             books.extend(book_page.items)
 
             current_page += 1
-            pages_count = book_page.total_pages
+            pages_count = book_page.pages
 
         if len(books) == 0:
             return CreateTaskError(message="No books!")
