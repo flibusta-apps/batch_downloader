@@ -223,6 +223,7 @@ async def create_archive(task_id: uuid.UUID, redis: Redis = TaskiqDepends(get_re
             size,
         )
 
+    task.status = TaskStatusEnum.COMPLETE
     task.result_link = await loop.run_in_executor(
         None,
         minio_client.get_presigned_url,
