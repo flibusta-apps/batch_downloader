@@ -30,7 +30,7 @@ class Page(GenericModel, Generic[Item]):
     total: int
     page: int
     size: int
-    total_pages: int
+    pages: int
 
 
 class Sequence(BaseModel):
