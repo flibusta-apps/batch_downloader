@@ -37,7 +37,7 @@ class TaskManager:
         key = cls._get_key(task.id)
 
         try:
-            data = task.json()
+            data = task.model_dump_json()
             await redis.set(key, data, ex=60 * 60)
 
             return True
@@ -53,6 +53,6 @@ class TaskManager:
             if data is None:
                 return None
 
-            return Task.parse_raw(data)
+            return Task.model_validate_json(data)
         except RedisError:
             return None

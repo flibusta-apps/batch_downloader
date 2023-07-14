@@ -1,7 +1,7 @@
 from fastapi import HTTPException, Request, Security, status
 
 from redis.asyncio import Redis
-from taskiq import TaskiqDepends
+from taskiq import Context, TaskiqDepends
 
 from core.auth import default_security
 from core.config import env_config
@@ -14,5 +14,9 @@ async def check_token(api_key: str = Security(default_security)):
         )
 
 
-def get_redis(request: Request = TaskiqDepends()) -> Redis:
+def get_redis(request: Request) -> Redis:
     return request.app.state.redis
+
+
+def get_redis_taskiq(context: Context = TaskiqDepends()) -> Redis:
+    return context.state.redis

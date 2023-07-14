@@ -8,18 +8,18 @@ packages = [{include = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
-pydantic = "^1.10.8"
-fastapi = "^0.95.2"
-orjson = "^3.9.0"
-redis = {extras = ["hiredis"], version = "^4.5.5"}
-taskiq = "^0.6.0"
-taskiq-redis = "^0.3.1"
-taskiq-fastapi = "^0.1.2"
-sentry-sdk = "^1.25.0"
+pydantic = "^2.0.3"
+fastapi = "^0.100.0"
+orjson = "^3.9.2"
+redis = {extras = ["hiredis"], version = "^4.6.0"}
+taskiq = "^0.8.3"
+taskiq-redis = "^0.4.0"
+sentry-sdk = "^1.28.1"
 httpx = "^0.24.1"
 minio = "^7.1.15"
-uvicorn = {extras = ["standard"], version = "^0.22.0"}
+uvicorn = {extras = ["standard"], version = "^0.23.0"}
 transliterate = "^1.10.2"
+pydantic-settings = "^2.0.2"
 
 
 [build-system]

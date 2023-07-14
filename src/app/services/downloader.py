@@ -13,7 +13,7 @@ from taskiq import TaskiqDepends
 from taskiq.task import AsyncTaskiqTask
 from transliterate import translit
 
-from app.depends import get_redis
+from app.depends import get_redis_taskiq
 from app.services.library_client import LibraryClient
 from app.services.task_manager import ObjectType, TaskManager, TaskStatusEnum
 from core.config import env_config
@@ -81,7 +81,7 @@ async def download_file_to_file(link: str, output: BytesIO) -> bool:
 
 
 @broker.task()
-async def download(task_id: uuid.UUID, book_id: int, file_type: str) -> str | None:
+async def download(task_id: str, book_id: int, file_type: str) -> str | None:
     try:
         with tempfile.SpooledTemporaryFile() as temp_file:
             data = await _download_to_tmpfile(book_id, file_type, temp_file)
@@ -127,8 +127,8 @@ async def _check_subtasks(subtasks: list[str]) -> bool:
 
 
 @broker.task()
-async def check_subtasks(task_id: uuid.UUID, redis: Redis = TaskiqDepends(get_redis)):
-    task = await TaskManager.get_task(redis, task_id)
+async def check_subtasks(task_id: str, redis: Redis = TaskiqDepends(get_redis_taskiq)):
+    task = await TaskManager.get_task(redis, uuid.UUID(task_id))
 
     if task is None:
         return False
@@ -141,8 +141,8 @@ async def check_subtasks(task_id: uuid.UUID, redis: Redis = TaskiqDepends(get_re
 
 
 @broker.task()
-async def create_archive(task_id: uuid.UUID, redis: Redis = TaskiqDepends(get_redis)):
-    task = await TaskManager.get_task(redis, task_id)
+async def create_archive(task_id: str, redis: Redis = TaskiqDepends(get_redis_taskiq)):
+    task = await TaskManager.get_task(redis, uuid.UUID(task_id))
     assert task
 
     match task.object_type:
