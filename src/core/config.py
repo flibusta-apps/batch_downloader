@@ -7,7 +7,7 @@ class Config(BaseSettings):
     REDIS_HOST: str
     REDIS_PORT: int
     REDIS_DB: int
-    REDIS_PASSWORD: str | None
+    REDIS_PASSWORD: str | None = None
 
     MINIO_HOST: str
     MINIO_BUCKET: str
@@ -20,7 +20,7 @@ class Config(BaseSettings):
     CACHE_API_KEY: str
     CACHE_URL: str
 
-    SENTRY_DSN: str | None
+    SENTRY_DSN: str | None = None
 
 
 env_config = Config()  # type: ignore
