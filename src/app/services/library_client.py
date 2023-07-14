@@ -2,7 +2,6 @@ from typing import Generic, TypeVar
 
 import httpx
 from pydantic import BaseModel
-from pydantic.generics import GenericModel
 
 from core.config import env_config
 
@@ -25,7 +24,7 @@ class TranslatorBook(BaseModel):
 Item = TypeVar("Item", bound=BaseModel)
 
 
-class Page(GenericModel, Generic[Item]):
+class Page(BaseModel, Generic[Item]):
     items: list[Item]
     total: int
     page: int
@@ -64,7 +63,7 @@ class LibraryClient:
             if response.status_code != 200:
                 return None
 
-            return Page[SequenceBook].parse_raw(response.text)
+            return Page[SequenceBook].model_validate_json(response.text)
 
     @staticmethod
     async def get_author_books(
@@ -84,7 +83,7 @@ class LibraryClient:
             if response.status_code != 200:
                 return None
 
-            return Page[AuthorBook].parse_raw(response.text)
+            return Page[AuthorBook].model_validate_json(response.text)
 
     @staticmethod
     async def get_translator_books(
@@ -104,7 +103,7 @@ class LibraryClient:
             if response.status_code != 200:
                 return None
 
-            return Page[TranslatorBook].parse_raw(response.text)
+            return Page[TranslatorBook].model_validate_json(response.text)
 
     @staticmethod
     async def get_sequence(sequence_id: int) -> Sequence | None:
@@ -117,7 +116,7 @@ class LibraryClient:
         if response.status_code != 200:
             return None
 
-        return Sequence.parse_raw(response.text)
+        return Sequence.model_validate_json(response.text)
 
     @staticmethod
     async def get_author(author_id: int) -> Author | None:
@@ -130,4 +129,4 @@ class LibraryClient:
         if response.status_code != 200:
             return None
 
-        return Author.parse_raw(response.text)
+        return Author.model_validate_json(response.text)
