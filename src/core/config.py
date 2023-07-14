@@ -1,4 +1,4 @@
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 
 
 class Config(BaseSettings):
@@ -23,7 +23,7 @@ class Config(BaseSettings):
     SENTRY_DSN: str | None
 
 
-env_config = Config()
+env_config = Config()  # type: ignore
 
 REDIS_URL = (
     f"redis://{env_config.REDIS_HOST}:{env_config.REDIS_PORT}/{env_config.REDIS_DB}"
