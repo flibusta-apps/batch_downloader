@@ -60,11 +60,16 @@ class TaskCreator:
 
         task_ids: list[str] = []
 
+        prev_task_id = None
+
         for book in books:
             if file_format not in book.available_types:
                 continue
 
-            task = await download.kiq(str(task_id), book.id, file_format)
+            task = await download.kiq(
+                str(task_id), book.id, file_format, prev_task_id=prev_task_id
+            )
+            prev_task_id = task.task_id
             task_ids.append(task.task_id)
 
         if len(task_ids) == 0:

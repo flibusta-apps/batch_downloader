@@ -81,7 +81,15 @@ async def download_file_to_file(link: str, output: BytesIO) -> bool:
 
 
 @broker.task()
-async def download(task_id: str, book_id: int, file_type: str) -> str | None:
+async def download(
+    task_id: str, book_id: int, file_type: str, prev_task_id: str | None = None
+) -> str | None:
+    if prev_task_id:
+        prev_task = AsyncTaskiqTask(prev_task_id, result_backend)
+
+        while not (await prev_task.is_ready()):
+            await asyncio.sleep(0.1)
+
     try:
         with tempfile.SpooledTemporaryFile() as temp_file:
             data = await _download_to_tmpfile(book_id, file_type, temp_file)
