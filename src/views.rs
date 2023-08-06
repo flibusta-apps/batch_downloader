@@ -67,8 +67,8 @@ pub async fn get_router() -> Router {
     let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
 
     let app_router = Router::new()
-        .route("/", post(create_archive_task))
-        .route("/check_archive/:task_id", get(check_archive_task_status))
+        .route("/api/", post(create_archive_task))
+        .route("/api/check_archive/:task_id", get(check_archive_task_status))
         .layer(middleware::from_fn(auth))
         .layer(prometheus_layer);
 

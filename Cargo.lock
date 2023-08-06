@@ -249,7 +249,6 @@ dependencies = [
  "base64",
  "bytes",
  "futures-core",
- "hex",
  "md5",
  "minio-rsc",
  "moka",
