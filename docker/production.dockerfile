@@ -1,32 +1,21 @@
-FROM ghcr.io/flibusta-apps/base_docker_images:3.11-poetry-buildtime AS build-image
-
-RUN apt-get update \
-    && apt-get install git -y --no-install-recommends \
-    && rm -rf /var/cache/*
-
-WORKDIR /root/poetry
-COPY pyproject.toml poetry.lock /root/poetry/
-
-ENV VENV_PATH=/opt/venv
-
-RUN poetry export --without-hashes > requirements.txt \
-    && . /opt/venv/bin/activate \
-    && pip install -r requirements.txt --no-cache-dir
-
-
-FROM ghcr.io/flibusta-apps/base_docker_images:3.11-postgres-runtime AS runtime-image
+FROM rust:bullseye AS builder
 
 WORKDIR /app
 
-COPY ./src/ /app/
+COPY . .
 
-ENV VENV_PATH=/opt/venv
-ENV PATH="$VENV_PATH/bin:$PATH"
+RUN cargo build --release --bin batch_downloader
 
-COPY --from=build-image $VENV_PATH $VENV_PATH
-COPY ./scripts/start_production.sh /root/
-COPY ./scripts/start_production_taskiq.sh /root/
 
-EXPOSE 8080
+FROM debian:bullseye-slim
 
-CMD bash /root/start_production.sh
+RUN apt-get update \
+    && apt-get install -y openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-ca-certificates
+
+WORKDIR /app
+
+COPY --from=builder /app/target/release/batch_downloader /usr/local/bin
+ENTRYPOINT ["/usr/local/bin/batch_downloader"]
