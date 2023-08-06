@@ -5,12 +5,11 @@ use smallvec::SmallVec;
 use smartstring::alias::String as SmartString;
 use tempfile::SpooledTempFile;
 use tracing::log;
-use translit::{Transliterator, gost779b_ru, CharsMapping};
 use zip::write::FileOptions;
 
 use crate::{structures::{CreateTask, Task, ObjectType}, config, views::TASK_RESULTS, services::{downloader::download, utils::{get_stream, get_filename}, minio::get_minio}};
 
-use super::{library_client::{Book, get_sequence_books, get_author_books, get_translator_books, Page, get_sequence, get_author}, utils::get_key};
+use super::{library_client::{Book, get_sequence_books, get_author_books, get_translator_books, Page}, utils::get_key};
 
 
 pub async fn get_books<Fut>(
@@ -46,8 +45,7 @@ where
 
     let result = result
         .iter()
-        .filter(|book| book.available_types.contains(&file_format.to_string()))
-        .map(|b| b.clone())
+        .filter(|book| book.available_types.contains(&file_format.to_string())).cloned()
         .collect();
 
     Ok(result)
@@ -188,7 +186,7 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         },
     };
 
-    let archive_result = match create_archive(books, data.file_format).await {
+    let archive_result = match create_archive(key.clone(), books, data.file_format).await {
         Ok(v) => v,
         Err(err) => {
             set_task_error(key.clone(), "Failed downloading books!".to_string()).await;

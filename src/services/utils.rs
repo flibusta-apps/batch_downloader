@@ -62,20 +62,16 @@ pub fn get_stream(mut temp_file: Box<dyn Read + Send>) -> impl futures_core::Str
     stream! {
         let mut buf = [0; 2048];
 
-        loop {
-            match temp_file.read(&mut buf) {
-                Ok(count) => {
-                    if count == 0 {
-                        break;
-                    }
-
-                    yield Ok(Bytes::copy_from_slice(&buf[0..count]))
-                },
-                Err(_) => break
+        while let Ok(count) = temp_file.read(&mut buf) {
+            if count == 0 {
+                break;
             }
+
+            yield Ok(Bytes::copy_from_slice(&buf[0..count]))
         }
     }
 }
+
 
 pub async fn get_filename(object_type: ObjectType, object_id: u32) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let result_filename = match object_type {
@@ -132,7 +128,7 @@ pub async fn get_filename(object_type: ObjectType, object_id: u32) -> Result<Str
 
         let normal_filename = normal_filename.replace(|c: char| !c.is_ascii(), "");
 
-        let right_part = format!(".zip");
+        let right_part = ".zip".to_string();
         let normal_filename_slice = std::cmp::min(64 - right_part.len() - 1, normal_filename.len() - 1);
 
         let left_part = if normal_filename_slice == normal_filename.len() - 1 {

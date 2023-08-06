@@ -10,7 +10,7 @@ pub fn get_minio() -> Minio {
         None
     );
 
-    return Minio::builder()
+    Minio::builder()
         .host(&config::CONFIG.minio_host)
         .provider(provider)
         .secure(false)

@@ -29,7 +29,7 @@ async fn create_archive_task(
         None => create_task(data).await,
     };
 
-    Json::<Task>(result.into()).into_response()
+    Json::<Task>(result).into_response()
 }
 
 
@@ -37,7 +37,7 @@ async fn check_archive_task_status(
     Path(task_id): Path<String>
 ) -> impl IntoResponse {
     match TASK_RESULTS.get(&task_id) {
-        Some(result) => Json::<Task>(result.into()).into_response(),
+        Some(result) => Json::<Task>(result).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
