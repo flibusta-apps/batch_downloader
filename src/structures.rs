@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 use smartstring::alias::String as SmartString;
 
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     InProgress,

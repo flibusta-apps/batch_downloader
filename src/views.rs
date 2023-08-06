@@ -8,7 +8,7 @@ use tower_http::trace::{TraceLayer, self};
 
 use tracing::Level;
 
-use crate::{config::CONFIG, structures::{Task, CreateTask}, services::{task_creator::create_task, utils::get_key}};
+use crate::{config::CONFIG, structures::{Task, CreateTask, TaskStatus}, services::{task_creator::create_task, utils::get_key}};
 
 
 pub static TASK_RESULTS: Lazy<Cache<String, Task>> = Lazy::new(|| {
@@ -25,7 +25,13 @@ async fn create_archive_task(
     let key = get_key(data.clone());
 
     let result = match TASK_RESULTS.get(&key) {
-        Some(result) => result,
+        Some(result) => {
+            if result.status == TaskStatus::Failled {
+                 create_task(data).await
+            } else {
+                result
+            }
+        },
         None => create_task(data).await,
     };
 
