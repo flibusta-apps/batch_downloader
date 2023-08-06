@@ -142,7 +142,7 @@ pub async fn create_archive(key: String, books: Vec<Book>, file_format: SmartStr
             Err(err) => return Err(Box::new(err)),
         };
 
-        set_progress_description(key.clone(), format!("Обработано: {}/{}", index + 1, books_count)).await;
+        set_progress_description(key.clone(), format!("Загрузка книг: {}/{}", index + 1, books_count)).await;
     }
 
     let mut archive_result = match archive.finish() {
@@ -162,6 +162,8 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         ObjectType::Author => get_books(data.object_id, data.allowed_langs, get_author_books, data.file_format.clone()).await,
         ObjectType::Translator => get_books(data.object_id, data.allowed_langs, get_translator_books, data.file_format.clone()).await,
     };
+
+    set_progress_description(key.clone(), "Получение списка книг...".to_string()).await;
 
     let books = match books {
         Ok(v) => v,
@@ -186,6 +188,8 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         },
     };
 
+    set_progress_description(key.clone(), "Сборка архива...".to_string()).await;
+
     let archive_result = match create_archive(key.clone(), books, data.file_format).await {
         Ok(v) => v,
         Err(err) => {
@@ -194,6 +198,8 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
             return;
         },
     };
+
+    set_progress_description(key.clone(), "Загрузка архива...".to_string()).await;
 
     let link = match upload_to_minio(archive_result, final_filename.clone()).await {
         Ok(v) => v,
