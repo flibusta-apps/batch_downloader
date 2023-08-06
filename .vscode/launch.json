@@ -1,0 +1,56 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'batch_downloader'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=batch_downloader",
+                    "--package=batch_downloader"
+                ],
+                "filter": {
+                    "name": "batch_downloader",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "API_KEY": "debug",
+                "MINIO_HOST": "minio.kurbezz.ru:9000",
+                "MINIO_BUCKET": "book.archives",
+                "MINIO_ACCESS_KEY": "SAYRdiuaMvc3gjtxGZRm",
+                "MINIO_SECRET_KEY": "MUwBZs80J8rzKKJvp9Iv4tLBfyxakH7MkrgHiWc1",
+                "LIBRARY_API_KEY": "v3TGJxquSX8qg42EdeatASJddrSDcPdK",
+                "LIBRARY_URL": "https://book-library.kurbezz.ru",
+                "CACHE_API_KEY": "kGaA6feem7Nz5ZuRQDp6L8pdwEdnCAKH",
+                "CACHE_URL": "https://book-channel-cache.kurbezz.ru",
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'batch_downloader'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=batch_downloader",
+                    "--package=batch_downloader"
+                ],
+                "filter": {
+                    "name": "batch_downloader",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
