@@ -213,7 +213,7 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
     let task = Task {
         id: key.clone(),
         status: crate::structures::TaskStatus::Complete,
-        status_description: "Архив готов!".to_string(),
+        status_description: "Архив готов! Ожидайте файл".to_string(),
         error_message: None,
         result_filename: Some(final_filename),
         result_link: Some(link)
