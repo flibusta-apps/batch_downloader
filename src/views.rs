@@ -8,7 +8,7 @@ use tower_http::trace::{TraceLayer, self};
 
 use tracing::Level;
 
-use crate::{config::CONFIG, structures::{Task, CreateTask}, services::task_creator::{get_key, create_task}};
+use crate::{config::CONFIG, structures::{Task, CreateTask}, services::{task_creator::create_task, utils::get_key}};
 
 
 pub static TASK_RESULTS: Lazy<Cache<String, Task>> = Lazy::new(|| {

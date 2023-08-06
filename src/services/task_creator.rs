@@ -1,37 +1,23 @@
-use std::{fmt, io::{Seek, Read}};
+use std::io::Seek;
 
-use base64::{engine::general_purpose, Engine};
-use bytes::Bytes;
-use minio_rsc::{provider::StaticProvider, Minio, types::args::{ObjectArgs, PresignedArgs}, errors::MinioError};
-use reqwest::StatusCode;
+use minio_rsc::types::args::{ObjectArgs, PresignedArgs};
 use smallvec::SmallVec;
 use smartstring::alias::String as SmartString;
 use tempfile::SpooledTempFile;
+use tracing::log;
 use translit::{Transliterator, gost779b_ru, CharsMapping};
 use zip::write::FileOptions;
-use async_stream::stream;
 
-use crate::{structures::{CreateTask, Task, ObjectType}, config, views::TASK_RESULTS};
+use crate::{structures::{CreateTask, Task, ObjectType}, config, views::TASK_RESULTS, services::{downloader::download, utils::{get_stream, get_filename}, minio::get_minio}};
 
-use super::{library_client::{Book, get_sequence_books, get_author_books, get_translator_books, Page, get_sequence, get_author}, utils::response_to_tempfile};
-
-
-pub fn get_key(
-    input_data: CreateTask
-) -> String {
-    let mut data = input_data.clone();
-    data.allowed_langs.sort();
-
-    let data_string = serde_json::to_string(&data).unwrap();
-
-    format!("{:x}", md5::compute(data_string))
-}
+use super::{library_client::{Book, get_sequence_books, get_author_books, get_translator_books, Page, get_sequence, get_author}, utils::get_key};
 
 
 pub async fn get_books<Fut>(
     object_id: u32,
     allowed_langs: SmallVec<[SmartString; 3]>,
-    books_getter: fn(id: u32, page: u32, allowed_langs: SmallVec<[SmartString; 3]>) -> Fut
+    books_getter: fn(id: u32, page: u32, allowed_langs: SmallVec<[SmartString; 3]>) -> Fut,
+    file_format: SmartString
 ) -> Result<Vec<Book>, Box<dyn std::error::Error + Send + Sync>>
 where
     Fut: std::future::Future<Output = Result<Page<Book>, Box<dyn std::error::Error + Send + Sync>>>,
@@ -58,106 +44,80 @@ where
         current_page += 1;
     };
 
+    let result = result
+        .iter()
+        .filter(|book| book.available_types.contains(&file_format.to_string()))
+        .map(|b| b.clone())
+        .collect();
+
     Ok(result)
 }
 
-#[derive(Debug, Clone)]
-struct DownloadError {
-    status_code: StatusCode,
+
+pub async fn set_task_error(key: String, error_message: String) {
+    let task = Task {
+        id: key.clone(),
+        status: crate::structures::TaskStatus::Failled,
+        status_description: "Ошибка!".to_string(),
+        error_message: Some(error_message),
+        result_filename: None,
+        result_link: None
+    };
+
+    TASK_RESULTS.insert(key, task.clone()).await;
 }
 
-impl fmt::Display for DownloadError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Status code is {0}", self.status_code)
+
+pub async fn set_progress_description(key: String, description: String) {
+    let task = Task {
+        id: key.clone(),
+        status: crate::structures::TaskStatus::InProgress,
+        status_description: description,
+        error_message: None,
+        result_filename: None,
+        result_link: None
+    };
+
+    TASK_RESULTS.insert(key, task.clone()).await;
+}
+
+
+
+pub async fn upload_to_minio(archive: SpooledTempFile, filename: String) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let minio = get_minio();
+
+    let is_bucket_exist = match minio.bucket_exists(&config::CONFIG.minio_bucket).await {
+        Ok(v) => v,
+        Err(err) => return Err(Box::new(err)),
+    };
+
+    if !is_bucket_exist {
+        let _ = minio.make_bucket(&config::CONFIG.minio_bucket, false).await;
     }
-}
 
-impl std::error::Error for DownloadError {}
+    let data_stream = get_stream(Box::new(archive));
 
-pub async fn download(
-    book_id: u64,
-    file_type: String,
-) -> Result<Option<(SpooledTempFile, String)>, Box<dyn std::error::Error + Send + Sync>> {
-    let mut response = reqwest::Client::new()
-        .get(format!(
-            "{}/api/v1/download/{book_id}/{file_type}",
-            &config::CONFIG.cache_url
-        ))
-        .header("Authorization", &config::CONFIG.cache_api_key)
-        .send()
-        .await?
-        .error_for_status()?;
-
-    if response.status() != StatusCode::OK {
-        return Err(Box::new(DownloadError {
-            status_code: response.status(),
-        }));
-    };
-
-    let headers = response.headers();
-
-    let base64_encoder = general_purpose::STANDARD;
-
-    let filename = std::str::from_utf8(
-        &base64_encoder
-            .decode(headers.get("x-filename-b64").unwrap())
-            .unwrap(),
-    )
-    .unwrap()
-    .to_string();
-
-    let output_file = match response_to_tempfile(&mut response).await {
-        Some(v) => v.0,
-        None => return Ok(None),
-    };
-
-    Ok(Some((output_file, filename)))
-}
-
-
-fn get_stream(mut temp_file: Box<dyn Read + Send>) -> impl futures_core::Stream<Item = Result<Bytes, MinioError>> {
-    stream! {
-        let mut buf = [0; 2048];
-
-        loop {
-            match temp_file.read(&mut buf) {
-                Ok(count) => {
-                    if count == 0 {
-                        break;
-                    }
-
-                    yield Ok(Bytes::copy_from_slice(&buf[0..count]))
-                },
-                Err(_) => break
-            }
-        }
+    if let Err(err) = minio.put_object_stream(
+        ObjectArgs::new(&config::CONFIG.minio_bucket, filename.clone()),
+        Box::pin(data_stream)
+    ).await {
+        return Err(Box::new(err));
     }
-}
 
-
-pub async fn create_archive_task(key: String, data: CreateTask) {
-    let books = match data.object_type {
-        ObjectType::Sequence => get_books(data.object_id, data.allowed_langs, get_sequence_books).await,
-        ObjectType::Author => get_books(data.object_id, data.allowed_langs, get_author_books).await,
-        ObjectType::Translator => get_books(data.object_id, data.allowed_langs, get_translator_books).await,
-    };
-
-    let books = match books {
+    let link = match minio.presigned_get_object(
+        PresignedArgs::new(&config::CONFIG.minio_bucket, filename)
+    ).await {
         Ok(v) => v,
         Err(err) => {
-            return; // log error and task error
+            return Err(Box::new(err));
         },
     };
 
-    let books: Vec<_> = books
-        .iter()
-        .filter(|book| book.available_types.contains(&data.file_format))
-        .collect();
+    Ok(link)
+}
 
-    if books.is_empty() {
-        return; // log error and task error
-    }
 
+pub async fn create_archive(key: String, books: Vec<Book>, file_format: SmartString) -> Result<SpooledTempFile, Box<dyn std::error::Error + Send + Sync>> {
     let output_file = tempfile::spooled_tempfile(5 * 1024 * 1024);
     let mut archive = zip::ZipWriter::new(output_file);
 
@@ -166,152 +126,96 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o755);
 
-    for book in books {
-        let (mut tmp_file, filename) = match download(book.id, data.file_format.clone()).await {
-            Ok(v) => {
-                match v {
-                    Some(v) => v,
-                    None => {
-                        return; // log error and task error
-                    },
-                }
-            },
-            Err(err) => {
-                return; // log error and task error
-            },
+    let books_count = books.len();
+
+    for (index, book) in books.iter().enumerate() {
+        let (mut tmp_file, filename) = match download(book.id, file_format.clone()).await {
+            Ok(v) => v,
+            Err(_) => continue,
         };
 
         match archive.start_file(filename, options) {
             Ok(_) => (),
-            Err(_) => return, // log error and task error
+            Err(err) => return Err(Box::new(err)),
         };
 
         match std::io::copy(&mut tmp_file, &mut archive) {
             Ok(_) => (),
-            Err(_) => return,  // log error and task error
+            Err(err) => return Err(Box::new(err)),
         };
+
+        set_progress_description(key.clone(), format!("Обработано: {}/{}", index + 1, books_count)).await;
     }
 
     let mut archive_result = match archive.finish() {
         Ok(v) => v,
-        Err(err) => return,  // log error and task error
+        Err(err) => return Err(Box::new(err)),
     };
 
     archive_result.rewind().unwrap();
 
-    let result_filename = match data.object_type {
-        ObjectType::Sequence => {
-            match get_sequence(data.object_id).await {
-                Ok(v) => v.name,
-                Err(err) => {
-                    println!("{}", err);
-                    return;  // log error and task error
-                },
-            }
-        },
-        ObjectType::Author | ObjectType::Translator => {
-            match get_author(data.object_id).await {
-                Ok(v) => {
-                    vec![v.first_name, v.last_name, v.middle_name.unwrap_or("".to_string())]
-                        .into_iter()
-                        .filter(|v| !v.is_empty())
-                        .collect::<Vec<String>>()
-                        .join("_")
-                },
-                Err(err) => {
-                    println!("{}", err);
-                    return;   // log error and task error
-                },
-            }
+    Ok(archive_result)
+}
+
+
+pub async fn create_archive_task(key: String, data: CreateTask) {
+    let books = match data.object_type {
+        ObjectType::Sequence => get_books(data.object_id, data.allowed_langs, get_sequence_books, data.file_format.clone()).await,
+        ObjectType::Author => get_books(data.object_id, data.allowed_langs, get_author_books, data.file_format.clone()).await,
+        ObjectType::Translator => get_books(data.object_id, data.allowed_langs, get_translator_books, data.file_format.clone()).await,
+    };
+
+    let books = match books {
+        Ok(v) => v,
+        Err(err) => {
+            set_task_error(key.clone(), "Failed getting books!".to_string()).await;
+            log::error!("{}", err);
+            return;
         },
     };
 
-    let final_filename = {
-        let transliterator = Transliterator::new(gost779b_ru());
-
-        let mut filename_without_type = transliterator.convert(&result_filename, false);
-
-        "(),….’!\"?»«':".get(..).into_iter().for_each(|char| {
-            filename_without_type = filename_without_type.replace(char, "");
-        });
-
-        let replace_char_map: CharsMapping = [
-            ("—", "-"),
-            ("/", "_"),
-            ("№", "N"),
-            (" ", "_"),
-            ("–", "-"),
-            ("á", "a"),
-            (" ", "_"),
-            ("'", ""),
-            ("`", ""),
-            ("[", ""),
-            ("]", ""),
-            ("\"", ""),
-        ].to_vec();
-
-        let replace_transliterator = Transliterator::new(replace_char_map);
-        let normal_filename = replace_transliterator.convert(&filename_without_type, false);
-
-        let normal_filename = normal_filename.replace(|c: char| !c.is_ascii(), "");
-
-        let right_part = format!(".zip");
-        let normal_filename_slice = std::cmp::min(64 - right_part.len() - 1, normal_filename.len() - 1);
-
-        let left_part = if normal_filename_slice == normal_filename.len() - 1 {
-            &normal_filename
-        } else {
-            normal_filename.get(..normal_filename_slice).unwrap_or_else(|| panic!("Can't slice left part: {:?} {:?}", normal_filename, normal_filename_slice))
-        };
-
-        format!("{left_part}{right_part}")
-    };
-
-    let provider = StaticProvider::new(
-        &config::CONFIG.minio_access_key,
-        &config::CONFIG.minio_secret_key,
-        None
-    );
-    let minio = Minio::builder()
-        .host(&config::CONFIG.minio_host)
-        .provider(provider)
-        .secure(false)
-        .build()
-        .unwrap();
-
-    let is_bucket_exist = match minio.bucket_exists(&config::CONFIG.minio_bucket).await {
-        Ok(v) => v,
-        Err(err) => {
-            println!("{}", err);
-            return;   // log error and task error
-        },  // log error and task error
-    };
-
-    if !is_bucket_exist {
-        minio.make_bucket(&config::CONFIG.minio_bucket, false).await;
+    if books.is_empty() {
+        set_task_error(key.clone(), "No books!".to_string()).await;
+        return;
     }
 
-    let data_stream = get_stream(Box::new(archive_result));
-
-    if let Err(err) = minio.put_object_stream(
-        ObjectArgs::new(&config::CONFIG.minio_bucket, final_filename.clone()),
-        Box::pin(data_stream)
-    ).await {
-        println!("{}", err);
-        return;   // log error and task error
-    }
-
-    let link = match minio.presigned_get_object(
-        PresignedArgs::new(&config::CONFIG.minio_bucket, final_filename)
-    ).await {
+    let final_filename = match get_filename(data.object_type, data.object_id).await {
         Ok(v) => v,
         Err(err) => {
-            println!("{}", err);
-            return;   // log error and task error
-        },    // log error and task error
+            set_task_error(key.clone(), "Can't get archive name!".to_string()).await;
+            log::error!("{}", err);
+            return;
+        },
     };
 
-    println!("{}", link);
+    let archive_result = match create_archive(books, data.file_format).await {
+        Ok(v) => v,
+        Err(err) => {
+            set_task_error(key.clone(), "Failed downloading books!".to_string()).await;
+            log::error!("{}", err);
+            return;
+        },
+    };
+
+    let link = match upload_to_minio(archive_result, final_filename.clone()).await {
+        Ok(v) => v,
+        Err(err) => {
+            set_task_error(key.clone(), "Failed uploading archive!".to_string()).await;
+            log::error!("{}", err);
+            return;
+        },
+    };
+
+    let task = Task {
+        id: key.clone(),
+        status: crate::structures::TaskStatus::Complete,
+        status_description: "Архив готов!".to_string(),
+        error_message: None,
+        result_filename: Some(final_filename),
+        result_link: Some(link)
+    };
+
+    TASK_RESULTS.insert(key.clone(), task.clone()).await;
 }
 
 
@@ -323,6 +227,8 @@ pub async fn create_task(
     let task = Task {
         id: key.clone(),
         status: crate::structures::TaskStatus::InProgress,
+        status_description: "Подготовка".to_string(),
+        error_message: None,
         result_filename: None,
         result_link: None
     };

@@ -8,7 +8,8 @@ use smartstring::alias::String as SmartString;
 pub enum TaskStatus {
     InProgress,
     Archiving,
-    Complete
+    Complete,
+    Failled
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -23,7 +24,7 @@ pub enum ObjectType {
 pub struct CreateTask{
     pub object_id: u32,
     pub object_type: ObjectType,
-    pub file_format: String,
+    pub file_format: SmartString,
     pub allowed_langs: SmallVec<[SmartString; 3]>
 }
 
@@ -31,6 +32,8 @@ pub struct CreateTask{
 pub struct Task {
     pub id: String,
     pub status: TaskStatus,
+    pub status_description: String,
+    pub error_message: Option<String>,
     pub result_filename: Option<String>,
     pub result_link: Option<String>
 }
