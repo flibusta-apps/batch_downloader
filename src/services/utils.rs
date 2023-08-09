@@ -4,6 +4,7 @@ use tempfile::SpooledTempFile;
 use bytes::{Buf, Bytes};
 use async_stream::stream;
 use translit::{gost779b_ru, Transliterator, CharsMapping};
+use smartstring::alias::String as SmartString;
 
 use std::io::{Seek, SeekFrom, Write, Read};
 
@@ -73,7 +74,7 @@ pub fn get_stream(mut temp_file: Box<dyn Read + Send>) -> impl futures_core::Str
 }
 
 
-pub async fn get_filename(object_type: ObjectType, object_id: u32) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn get_filename(object_type: ObjectType, object_id: u32, file_format: SmartString) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let result_filename = match object_type {
         ObjectType::Sequence => {
             match get_sequence(object_id).await {
@@ -128,7 +129,7 @@ pub async fn get_filename(object_type: ObjectType, object_id: u32) -> Result<Str
 
         let normal_filename = normal_filename.replace(|c: char| !c.is_ascii(), "");
 
-        let right_part = ".zip".to_string();
+        let right_part = format!(".{file_format}.zip");
         let normal_filename_slice = std::cmp::min(64 - right_part.len() - 1, normal_filename.len() - 1);
 
         let left_part = if normal_filename_slice == normal_filename.len() - 1 {

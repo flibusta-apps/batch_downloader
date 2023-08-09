@@ -12,7 +12,7 @@ pub enum TaskStatus {
     Failled
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectType {
     Sequence,
