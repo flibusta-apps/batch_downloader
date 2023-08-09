@@ -30,7 +30,7 @@ pub async fn download(
 ) -> Result<(SpooledTempFile, String), Box<dyn std::error::Error + Send + Sync>> {
     let mut response = reqwest::Client::new()
         .get(format!(
-            "{}/api/v1/download/{book_id}/{file_type}",
+            "{}/api/v1/download/{book_id}/{file_type}/",
             &config::CONFIG.cache_url
         ))
         .header("Authorization", &config::CONFIG.cache_api_key)
