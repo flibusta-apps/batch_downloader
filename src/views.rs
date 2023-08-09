@@ -13,7 +13,7 @@ use crate::{config::CONFIG, structures::{Task, CreateTask, TaskStatus}, services
 
 pub static TASK_RESULTS: Lazy<Cache<String, Task>> = Lazy::new(|| {
     Cache::builder()
-        .time_to_idle(Duration::from_secs(24 * 60 * 60))
+        .time_to_idle(Duration::from_secs(12 * 60 * 60))
         .max_capacity(2048)
         .build()
 });
