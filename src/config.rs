@@ -19,7 +19,7 @@ pub struct Config {
     pub cache_api_key: String,
     pub cache_url: String,
 
-    // pub sentry_dsn: String
+    pub sentry_dsn: String
 }
 
 impl Config {
@@ -38,7 +38,7 @@ impl Config {
             cache_api_key: get_env("CACHE_API_KEY"),
             cache_url: get_env("CACHE_URL"),
 
-            // sentry_dsn: get_env("SENTRY_DSN")
+            sentry_dsn: get_env("SENTRY_DSN")
         }
     }
 }
