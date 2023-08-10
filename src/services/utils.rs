@@ -100,6 +100,16 @@ pub async fn get_filename(object_type: ObjectType, object_id: u32, file_format: 
         },
     };
 
+    let result_filename = {
+        let postfix = match object_type {
+            ObjectType::Sequence => "s",
+            ObjectType::Author => "a",
+            ObjectType::Translator => "t",
+        };
+
+        format!("{result_filename}_{postfix}")
+    };
+
     let final_filename = {
         let transliterator = Transliterator::new(gost779b_ru());
 

@@ -239,9 +239,7 @@ pub async fn create_task(
 
     TASK_RESULTS.insert(key.clone(), task.clone()).await;
 
-    tokio::spawn(async {
-        create_archive_task(key, data).await;
-    });
+    tokio::spawn(create_archive_task(key, data));
 
     task
 }
