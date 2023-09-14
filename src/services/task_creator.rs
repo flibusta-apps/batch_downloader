@@ -55,7 +55,7 @@ where
 pub async fn set_task_error(key: String, error_message: String) {
     let task = Task {
         id: key.clone(),
-        status: crate::structures::TaskStatus::Failled,
+        status: crate::structures::TaskStatus::Failed,
         status_description: "Ошибка!".to_string(),
         error_message: Some(error_message),
         result_filename: None,
@@ -97,7 +97,8 @@ pub async fn upload_to_minio(archive: SpooledTempFile, filename: String) -> Resu
 
     if let Err(err) = minio.put_object_stream(
         ObjectArgs::new(&config::CONFIG.minio_bucket, filename.clone()),
-        Box::pin(data_stream)
+        Box::pin(data_stream),
+        None
     ).await {
         return Err(Box::new(err));
     }

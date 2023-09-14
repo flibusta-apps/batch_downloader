@@ -11,7 +11,7 @@ pub fn get_minio() -> Minio {
     );
 
     Minio::builder()
-        .host(&config::CONFIG.minio_host)
+        .endpoint(&config::CONFIG.minio_host)
         .provider(provider)
         .secure(false)
         .build()

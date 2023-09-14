@@ -9,7 +9,7 @@ pub enum TaskStatus {
     InProgress,
     Archiving,
     Complete,
-    Failled
+    Failed
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use axum::{Router, routing::{get, post}, middleware::{self, Next}, http::{Request, StatusCode, self}, response::{Response, IntoResponse}, extract::{Path, self}, Json};
+use axum::{Router, routing::{get, post}, middleware::{self, Next}, http::{Request, StatusCode, self}, response::{Response, IntoResponse}, extract::{Path}, Json};
 use axum_prometheus::PrometheusMetricLayer;
 use moka::future::Cache;
 use once_cell::sync::Lazy;
@@ -20,13 +20,13 @@ pub static TASK_RESULTS: Lazy<Cache<String, Task>> = Lazy::new(|| {
 
 
 async fn create_archive_task(
-    extract::Json(data): extract::Json<CreateTask>
+    Json(data): Json<CreateTask>
 ) -> impl IntoResponse {
     let key = get_key(data.clone());
 
     let result = match TASK_RESULTS.get(&key) {
         Some(result) => {
-            if result.status == TaskStatus::Failled {
+            if result.status == TaskStatus::Failed {
                  create_task(data).await
             } else {
                 result
