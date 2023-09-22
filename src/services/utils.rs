@@ -1,4 +1,4 @@
-use minio_rsc::errors::MinioError;
+use minio_rsc::error::Error;
 use reqwest::Response;
 use tempfile::SpooledTempFile;
 use bytes::{Buf, Bytes};
@@ -59,7 +59,7 @@ pub async fn response_to_tempfile(res: &mut Response) -> Option<(SpooledTempFile
 }
 
 
-pub fn get_stream(mut temp_file: Box<dyn Read + Send>) -> impl futures_core::Stream<Item = Result<Bytes, MinioError>> {
+pub fn get_stream(mut temp_file: Box<dyn Read + Send>) -> impl futures_core::Stream<Item = Result<Bytes, Error>> {
     stream! {
         let mut buf = [0; 2048];
 
