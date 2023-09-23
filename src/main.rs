@@ -5,22 +5,13 @@ pub mod structures;
 
 use std::{net::SocketAddr, str::FromStr};
 use sentry::{ClientOptions, types::Dsn, integrations::debug_images::DebugImagesIntegration};
+use tokio_cron_scheduler::{JobScheduler, Job};
 use tracing::info;
 
-use crate::views::get_router;
+use crate::{views::get_router, services::files_cleaner::clean_files};
 
 
-#[tokio::main]
-async fn main() {
-    let options = ClientOptions {
-        dsn: Some(Dsn::from_str(&config::CONFIG.sentry_dsn).unwrap()),
-        default_integrations: false,
-        ..Default::default()
-    }
-    .add_integration(DebugImagesIntegration::new());
-
-    let _guard = sentry::init(options);
-
+async fn start_app() {
     tracing_subscriber::fmt()
         .with_target(false)
         .compact()
@@ -35,5 +26,46 @@ async fn main() {
         .serve(app.into_make_service())
         .await
         .unwrap();
-    info!("Webserver shutdown...")
+    info!("Webserver shutdown...");
+}
+
+
+async fn start_job_scheduler() {
+    let job_scheduler = JobScheduler::new().await.unwrap();
+
+    let clean_files_job = match Job::new_async("0 */5 * * * *", |_uuid, _l| Box::pin(async {
+        match clean_files().await {
+            Ok(_) => info!("Files cleaned!"),
+            Err(err) => info!("Clean files err: {:?}", err),
+        };
+    })) {
+        Ok(v) => v,
+        Err(err) => panic!("{:?}", err),
+    };
+
+    job_scheduler.add(clean_files_job).await.unwrap();
+
+    info!("Scheduler start...");
+    match job_scheduler.start().await {
+        Ok(v) => v,
+        Err(err) => panic!("{:?}", err),
+    };
+}
+
+
+#[tokio::main]
+async fn main() {
+    let options = ClientOptions {
+        dsn: Some(Dsn::from_str(&config::CONFIG.sentry_dsn).unwrap()),
+        default_integrations: false,
+        ..Default::default()
+    }
+    .add_integration(DebugImagesIntegration::new());
+
+    let _guard = sentry::init(options);
+
+    tokio::join![
+        start_app(),
+        start_job_scheduler()
+    ];
 }

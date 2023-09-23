@@ -3,3 +3,4 @@ pub mod library_client;
 pub mod utils;
 pub mod downloader;
 pub mod minio;
+pub mod files_cleaner;
