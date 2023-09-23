@@ -34,9 +34,14 @@ async fn start_job_scheduler() {
     let job_scheduler = JobScheduler::new().await.unwrap();
 
     let clean_files_job = match Job::new_async("0 */5 * * * *", |_uuid, _l| Box::pin(async {
-        match clean_files().await {
-            Ok(_) => info!("Files cleaned!"),
-            Err(err) => info!("Clean files err: {:?}", err),
+        match clean_files(config::CONFIG.minio_bucket.clone()).await {
+            Ok(_) => info!("Archive files cleaned!"),
+            Err(err) => info!("Clean archive files err: {:?}", err),
+        };
+
+        match clean_files(config::CONFIG.minio_share_books_bucket.clone()).await {
+            Ok(_) => info!("Share files cleaned!"),
+            Err(err) => info!("Clean share files err: {:?}", err),
         };
     })) {
         Ok(v) => v,

@@ -13,6 +13,8 @@ pub struct Config {
     pub minio_access_key: String,
     pub minio_secret_key: String,
 
+    pub minio_share_books_bucket: String,
+
     pub library_api_key: String,
     pub library_url: String,
 
@@ -31,6 +33,8 @@ impl Config {
             minio_bucket: get_env("MINIO_BUCKET"),
             minio_access_key: get_env("MINIO_ACCESS_KEY"),
             minio_secret_key: get_env("MINIO_SECRET_KEY"),
+
+            minio_share_books_bucket: get_env("MINIO_SHARE_BOOKS_BUCKET"),
 
             library_api_key: get_env("LIBRARY_API_KEY"),
             library_url: get_env("LIBRARY_URL"),

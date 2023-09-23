@@ -2,14 +2,13 @@ use chrono::{DateTime, Utc, Duration};
 use minio_rsc::{client::ListObjectsArgs, datatype::Object};
 
 use super::minio::get_minio;
-use crate::config;
 
 
-pub async fn clean_files() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn clean_files(bucket: String) -> Result<(), Box<dyn std::error::Error>> {
     let minio_client = get_minio();
 
     let objects = minio_client.list_objects(
-        &config::CONFIG.minio_bucket,
+        &bucket,
         ListObjectsArgs::default()
     ).await?;
 
@@ -18,7 +17,7 @@ pub async fn clean_files() -> Result<(), Box<dyn std::error::Error>> {
         let last_modified_date: DateTime<Utc> = DateTime::parse_from_rfc3339(&last_modified)?.into();
 
         if last_modified_date <= delete_before {
-            let _ = minio_client.remove_object(&config::CONFIG.minio_bucket, key).await;
+            let _ = minio_client.remove_object(&bucket, key).await;
         }
     }
 
