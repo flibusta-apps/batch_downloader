@@ -1,15 +1,14 @@
-pub mod views;
 pub mod config;
 pub mod services;
 pub mod structures;
+pub mod views;
 
+use sentry::{integrations::debug_images::DebugImagesIntegration, types::Dsn, ClientOptions};
 use std::{net::SocketAddr, str::FromStr};
-use sentry::{ClientOptions, types::Dsn, integrations::debug_images::DebugImagesIntegration};
-use tokio_cron_scheduler::{JobScheduler, Job};
+use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::info;
 
-use crate::{views::get_router, services::files_cleaner::clean_files};
-
+use crate::{services::files_cleaner::clean_files, views::get_router};
 
 async fn start_app() {
     tracing_subscriber::fmt()
@@ -29,21 +28,22 @@ async fn start_app() {
     info!("Webserver shutdown...");
 }
 
-
 async fn start_job_scheduler() {
     let job_scheduler = JobScheduler::new().await.unwrap();
 
-    let clean_files_job = match Job::new_async("0 */5 * * * *", |_uuid, _l| Box::pin(async {
-        match clean_files(config::CONFIG.minio_bucket.clone()).await {
-            Ok(_) => info!("Archive files cleaned!"),
-            Err(err) => info!("Clean archive files err: {:?}", err),
-        };
+    let clean_files_job = match Job::new_async("0 */5 * * * *", |_uuid, _l| {
+        Box::pin(async {
+            match clean_files(config::CONFIG.minio_bucket.clone()).await {
+                Ok(_) => info!("Archive files cleaned!"),
+                Err(err) => info!("Clean archive files err: {:?}", err),
+            };
 
-        match clean_files(config::CONFIG.minio_share_books_bucket.clone()).await {
-            Ok(_) => info!("Share files cleaned!"),
-            Err(err) => info!("Clean share files err: {:?}", err),
-        };
-    })) {
+            match clean_files(config::CONFIG.minio_share_books_bucket.clone()).await {
+                Ok(_) => info!("Share files cleaned!"),
+                Err(err) => info!("Clean share files err: {:?}", err),
+            };
+        })
+    }) {
         Ok(v) => v,
         Err(err) => panic!("{:?}", err),
     };
@@ -57,7 +57,6 @@ async fn start_job_scheduler() {
     };
 }
 
-
 #[tokio::main]
 async fn main() {
     let options = ClientOptions {
@@ -69,8 +68,5 @@ async fn main() {
 
     let _guard = sentry::init(options);
 
-    tokio::join![
-        start_app(),
-        start_job_scheduler()
-    ];
+    tokio::join![start_app(), start_job_scheduler()];
 }

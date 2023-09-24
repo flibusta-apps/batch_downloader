@@ -1,6 +1,5 @@
 use once_cell::sync::Lazy;
 
-
 fn get_env(env: &'static str) -> String {
     std::env::var(env).unwrap_or_else(|_| panic!("Cannot get the {} env variable", env))
 }
@@ -21,7 +20,7 @@ pub struct Config {
     pub cache_api_key: String,
     pub cache_url: String,
 
-    pub sentry_dsn: String
+    pub sentry_dsn: String,
 }
 
 impl Config {
@@ -42,11 +41,9 @@ impl Config {
             cache_api_key: get_env("CACHE_API_KEY"),
             cache_url: get_env("CACHE_URL"),
 
-            sentry_dsn: get_env("SENTRY_DSN")
+            sentry_dsn: get_env("SENTRY_DSN"),
         }
     }
 }
 
-pub static CONFIG: Lazy<Config> = Lazy::new(|| {
-    Config::load()
-});
+pub static CONFIG: Lazy<Config> = Lazy::new(Config::load);

@@ -2,13 +2,12 @@ use std::fmt;
 
 use base64::{engine::general_purpose, Engine};
 use reqwest::StatusCode;
-use tempfile::SpooledTempFile;
 use smartstring::alias::String as SmartString;
+use tempfile::SpooledTempFile;
 
 use crate::config;
 
 use super::utils::response_to_tempfile;
-
 
 #[derive(Debug, Clone)]
 struct DownloadError {
@@ -22,7 +21,6 @@ impl fmt::Display for DownloadError {
 }
 
 impl std::error::Error for DownloadError {}
-
 
 pub async fn download(
     book_id: u64,
@@ -60,4 +58,3 @@ pub async fn download(
 
     Ok((output_file.0, filename))
 }
-

@@ -1,21 +1,18 @@
+use async_stream::stream;
+use bytes::{Buf, Bytes};
 use minio_rsc::error::Error;
 use reqwest::Response;
-use tempfile::SpooledTempFile;
-use bytes::{Buf, Bytes};
-use async_stream::stream;
-use translit::{gost779b_ru, Transliterator, CharsMapping};
 use smartstring::alias::String as SmartString;
+use tempfile::SpooledTempFile;
+use translit::{gost779b_ru, CharsMapping, Transliterator};
 
-use std::io::{Seek, SeekFrom, Write, Read};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 use crate::structures::{CreateTask, ObjectType};
 
-use super::library_client::{get_sequence, get_author};
+use super::library_client::{get_author, get_sequence};
 
-
-pub fn get_key(
-    input_data: CreateTask
-) -> String {
+pub fn get_key(input_data: CreateTask) -> String {
     let mut data = input_data.clone();
     data.allowed_langs.sort();
 
@@ -23,7 +20,6 @@ pub fn get_key(
 
     format!("{:x}", md5::compute(data_string))
 }
-
 
 pub async fn response_to_tempfile(res: &mut Response) -> Option<(SpooledTempFile, usize)> {
     let mut tmp_file = tempfile::spooled_tempfile(5 * 1024 * 1024);
@@ -58,8 +54,9 @@ pub async fn response_to_tempfile(res: &mut Response) -> Option<(SpooledTempFile
     Some((tmp_file, data_size))
 }
 
-
-pub fn get_stream(mut temp_file: Box<dyn Read + Send>) -> impl futures_core::Stream<Item = Result<Bytes, Error>> {
+pub fn get_stream(
+    mut temp_file: Box<dyn Read + Send>,
+) -> impl futures_core::Stream<Item = Result<Bytes, Error>> {
     stream! {
         let mut buf = [0; 2048];
 
@@ -73,29 +70,30 @@ pub fn get_stream(mut temp_file: Box<dyn Read + Send>) -> impl futures_core::Str
     }
 }
 
-
-pub async fn get_filename(object_type: ObjectType, object_id: u32, file_format: SmartString) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn get_filename(
+    object_type: ObjectType,
+    object_id: u32,
+    file_format: SmartString,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let result_filename = match object_type {
-        ObjectType::Sequence => {
-            match get_sequence(object_id).await {
-                Ok(v) => v.name,
-                Err(err) => {
-                    return Err(err);
-                },
+        ObjectType::Sequence => match get_sequence(object_id).await {
+            Ok(v) => v.name,
+            Err(err) => {
+                return Err(err);
             }
         },
-        ObjectType::Author | ObjectType::Translator => {
-            match get_author(object_id).await {
-                Ok(v) => {
-                    vec![v.first_name, v.last_name, v.middle_name.unwrap_or("".to_string())]
-                        .into_iter()
-                        .filter(|v| !v.is_empty())
-                        .collect::<Vec<String>>()
-                        .join("_")
-                },
-                Err(err) => {
-                    return Err(err);
-                },
+        ObjectType::Author | ObjectType::Translator => match get_author(object_id).await {
+            Ok(v) => vec![
+                v.first_name,
+                v.last_name,
+                v.middle_name.unwrap_or("".to_string()),
+            ]
+            .into_iter()
+            .filter(|v| !v.is_empty())
+            .collect::<Vec<String>>()
+            .join("_"),
+            Err(err) => {
+                return Err(err);
             }
         },
     };
@@ -132,7 +130,8 @@ pub async fn get_filename(object_type: ObjectType, object_id: u32, file_format: 
             ("[", ""),
             ("]", ""),
             ("\"", ""),
-        ].to_vec();
+        ]
+        .to_vec();
 
         let replace_transliterator = Transliterator::new(replace_char_map);
         let normal_filename = replace_transliterator.convert(&filename_without_type, false);
@@ -140,12 +139,20 @@ pub async fn get_filename(object_type: ObjectType, object_id: u32, file_format: 
         let normal_filename = normal_filename.replace(|c: char| !c.is_ascii(), "");
 
         let right_part = format!(".{file_format}.zip");
-        let normal_filename_slice = std::cmp::min(64 - right_part.len() - 1, normal_filename.len() - 1);
+        let normal_filename_slice =
+            std::cmp::min(64 - right_part.len() - 1, normal_filename.len() - 1);
 
         let left_part = if normal_filename_slice == normal_filename.len() - 1 {
             &normal_filename
         } else {
-            normal_filename.get(..normal_filename_slice).unwrap_or_else(|| panic!("Can't slice left part: {:?} {:?}", normal_filename, normal_filename_slice))
+            normal_filename
+                .get(..normal_filename_slice)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Can't slice left part: {:?} {:?}",
+                        normal_filename, normal_filename_slice
+                    )
+                })
         };
 
         format!("{left_part}{right_part}")

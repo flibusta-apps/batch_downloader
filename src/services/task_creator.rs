@@ -7,16 +7,27 @@ use tempfile::SpooledTempFile;
 use tracing::log;
 use zip::write::FileOptions;
 
-use crate::{structures::{CreateTask, Task, ObjectType}, config, views::TASK_RESULTS, services::{downloader::download, utils::{get_stream, get_filename}, minio::get_minio}};
+use crate::{
+    config,
+    services::{
+        downloader::download,
+        minio::get_minio,
+        utils::{get_filename, get_stream},
+    },
+    structures::{CreateTask, ObjectType, Task},
+    views::TASK_RESULTS,
+};
 
-use super::{library_client::{Book, get_sequence_books, get_author_books, get_translator_books, Page}, utils::get_key};
-
+use super::{
+    library_client::{get_author_books, get_sequence_books, get_translator_books, Book, Page},
+    utils::get_key,
+};
 
 pub async fn get_books<Fut>(
     object_id: u32,
     allowed_langs: SmallVec<[SmartString; 3]>,
     books_getter: fn(id: u32, page: u32, allowed_langs: SmallVec<[SmartString; 3]>) -> Fut,
-    file_format: SmartString
+    file_format: SmartString,
 ) -> Result<Vec<Book>, Box<dyn std::error::Error + Send + Sync>>
 where
     Fut: std::future::Future<Output = Result<Page<Book>, Box<dyn std::error::Error + Send + Sync>>>,
@@ -41,16 +52,16 @@ where
         result.extend(page.items);
 
         current_page += 1;
-    };
+    }
 
     let result = result
         .iter()
-        .filter(|book| book.available_types.contains(&file_format.to_string())).cloned()
+        .filter(|book| book.available_types.contains(&file_format.to_string()))
+        .cloned()
         .collect();
 
     Ok(result)
 }
-
 
 pub async fn set_task_error(key: String, error_message: String) {
     let task = Task {
@@ -60,12 +71,11 @@ pub async fn set_task_error(key: String, error_message: String) {
         error_message: Some(error_message),
         result_filename: None,
         result_link: None,
-        content_size: None
+        content_size: None,
     };
 
     TASK_RESULTS.insert(key, task.clone()).await;
 }
-
 
 pub async fn set_progress_description(key: String, description: String) {
     let task = Task {
@@ -75,15 +85,16 @@ pub async fn set_progress_description(key: String, description: String) {
         error_message: None,
         result_filename: None,
         result_link: None,
-        content_size: None
+        content_size: None,
     };
 
     TASK_RESULTS.insert(key, task.clone()).await;
 }
 
-
-
-pub async fn upload_to_minio(archive: SpooledTempFile, filename: String) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn upload_to_minio(
+    archive: SpooledTempFile,
+    filename: String,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let minio = get_minio();
 
     let is_bucket_exist = match minio.bucket_exists(&config::CONFIG.minio_bucket).await {
@@ -97,29 +108,36 @@ pub async fn upload_to_minio(archive: SpooledTempFile, filename: String) -> Resu
 
     let data_stream = get_stream(Box::new(archive));
 
-    if let Err(err) = minio.put_object_stream(
-        &config::CONFIG.minio_bucket,
-        filename.clone(),
-        Box::pin(data_stream),
-        None
-    ).await {
+    if let Err(err) = minio
+        .put_object_stream(
+            &config::CONFIG.minio_bucket,
+            filename.clone(),
+            Box::pin(data_stream),
+            None,
+        )
+        .await
+    {
         return Err(Box::new(err));
     }
 
-    let link = match minio.presigned_get_object(
-        PresignedArgs::new(&config::CONFIG.minio_bucket, filename)
-    ).await {
+    let link = match minio
+        .presigned_get_object(PresignedArgs::new(&config::CONFIG.minio_bucket, filename))
+        .await
+    {
         Ok(v) => v,
         Err(err) => {
             return Err(Box::new(err));
-        },
+        }
     };
 
     Ok(link)
 }
 
-
-pub async fn create_archive(key: String, books: Vec<Book>, file_format: SmartString) -> Result<(SpooledTempFile, u64), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn create_archive(
+    key: String,
+    books: Vec<Book>,
+    file_format: SmartString,
+) -> Result<(SpooledTempFile, u64), Box<dyn std::error::Error + Send + Sync>> {
     let output_file = tempfile::spooled_tempfile(5 * 1024 * 1024);
     let mut archive = zip::ZipWriter::new(output_file);
 
@@ -147,7 +165,11 @@ pub async fn create_archive(key: String, books: Vec<Book>, file_format: SmartStr
             Err(err) => return Err(Box::new(err)),
         };
 
-        set_progress_description(key.clone(), format!("Загрузка книг: {}/{}", index + 1, books_count)).await;
+        set_progress_description(
+            key.clone(),
+            format!("Загрузка книг: {}/{}", index + 1, books_count),
+        )
+        .await;
     }
 
     let mut archive_result = match archive.finish() {
@@ -160,12 +182,35 @@ pub async fn create_archive(key: String, books: Vec<Book>, file_format: SmartStr
     Ok((archive_result, bytes_count))
 }
 
-
 pub async fn create_archive_task(key: String, data: CreateTask) {
     let books = match data.object_type {
-        ObjectType::Sequence => get_books(data.object_id, data.allowed_langs, get_sequence_books, data.file_format.clone()).await,
-        ObjectType::Author => get_books(data.object_id, data.allowed_langs, get_author_books, data.file_format.clone()).await,
-        ObjectType::Translator => get_books(data.object_id, data.allowed_langs, get_translator_books, data.file_format.clone()).await,
+        ObjectType::Sequence => {
+            get_books(
+                data.object_id,
+                data.allowed_langs,
+                get_sequence_books,
+                data.file_format.clone(),
+            )
+            .await
+        }
+        ObjectType::Author => {
+            get_books(
+                data.object_id,
+                data.allowed_langs,
+                get_author_books,
+                data.file_format.clone(),
+            )
+            .await
+        }
+        ObjectType::Translator => {
+            get_books(
+                data.object_id,
+                data.allowed_langs,
+                get_translator_books,
+                data.file_format.clone(),
+            )
+            .await
+        }
     };
 
     set_progress_description(key.clone(), "Получение списка книг...".to_string()).await;
@@ -176,7 +221,7 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
             set_task_error(key.clone(), "Failed getting books!".to_string()).await;
             log::error!("{}", err);
             return;
-        },
+        }
     };
 
     if books.is_empty() {
@@ -184,25 +229,27 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         return;
     }
 
-    let final_filename = match get_filename(data.object_type, data.object_id, data.file_format.clone()).await {
-        Ok(v) => v,
-        Err(err) => {
-            set_task_error(key.clone(), "Can't get archive name!".to_string()).await;
-            log::error!("{}", err);
-            return;
-        },
-    };
+    let final_filename =
+        match get_filename(data.object_type, data.object_id, data.file_format.clone()).await {
+            Ok(v) => v,
+            Err(err) => {
+                set_task_error(key.clone(), "Can't get archive name!".to_string()).await;
+                log::error!("{}", err);
+                return;
+            }
+        };
 
     set_progress_description(key.clone(), "Сборка архива...".to_string()).await;
 
-    let (archive_result, content_size) = match create_archive(key.clone(), books, data.file_format).await {
-        Ok(v) => v,
-        Err(err) => {
-            set_task_error(key.clone(), "Failed downloading books!".to_string()).await;
-            log::error!("{}", err);
-            return;
-        },
-    };
+    let (archive_result, content_size) =
+        match create_archive(key.clone(), books, data.file_format).await {
+            Ok(v) => v,
+            Err(err) => {
+                set_task_error(key.clone(), "Failed downloading books!".to_string()).await;
+                log::error!("{}", err);
+                return;
+            }
+        };
 
     set_progress_description(key.clone(), "Загрузка архива...".to_string()).await;
 
@@ -212,7 +259,7 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
             set_task_error(key.clone(), "Failed uploading archive!".to_string()).await;
             log::error!("{}", err);
             return;
-        },
+        }
     };
 
     let task = Task {
@@ -222,16 +269,13 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         error_message: None,
         result_filename: Some(final_filename),
         result_link: Some(link),
-        content_size: Some(content_size)
+        content_size: Some(content_size),
     };
 
     TASK_RESULTS.insert(key.clone(), task.clone()).await;
 }
 
-
-pub async fn create_task(
-    data: CreateTask
-) -> Task {
+pub async fn create_task(data: CreateTask) -> Task {
     let key = get_key(data.clone());
 
     let task = Task {
@@ -241,7 +285,7 @@ pub async fn create_task(
         error_message: None,
         result_filename: None,
         result_link: None,
-        content_size: None
+        content_size: None,
     };
 
     TASK_RESULTS.insert(key.clone(), task.clone()).await;

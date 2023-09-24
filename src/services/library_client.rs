@@ -5,17 +5,16 @@ use tracing::log;
 
 use crate::config;
 
-
 const PAGE_SIZE: &str = "50";
 
-
-fn get_allowed_langs_params(allowed_langs: SmallVec<[SmartString; 3]>) -> Vec<(&'static str, SmartString)> {
+fn get_allowed_langs_params(
+    allowed_langs: SmallVec<[SmartString; 3]>,
+) -> Vec<(&'static str, SmartString)> {
     allowed_langs
         .into_iter()
         .map(|lang| ("allowed_langs", lang))
         .collect()
 }
-
 
 async fn _make_request<T>(
     url: &str,
@@ -37,17 +36,15 @@ where
         Err(err) => {
             log::error!("Failed serialization: url={:?} err={:?}", url, err);
             Err(Box::new(err))
-        },
+        }
     }
 }
-
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Book {
     pub id: u64,
-    pub available_types: SmallVec<[String; 4]>
+    pub available_types: SmallVec<[String; 4]>,
 }
-
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Page<T> {
@@ -60,22 +57,19 @@ pub struct Page<T> {
     pub pages: u32,
 }
 
-
 #[derive(Deserialize, Debug, Clone)]
 pub struct Sequence {
     pub id: u32,
-    pub name: String
+    pub name: String,
 }
-
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Author {
     pub id: u32,
     pub first_name: String,
     pub last_name: String,
-    pub middle_name: Option<String>
+    pub middle_name: Option<String>,
 }
-
 
 pub async fn get_author_books(
     id: u32,
