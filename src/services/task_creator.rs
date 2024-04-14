@@ -94,7 +94,7 @@ pub async fn set_progress_description(key: String, description: String) {
 pub async fn upload_to_minio(
     archive: SpooledTempFile,
     filename: String,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(String, u64), Box<dyn std::error::Error + Send + Sync>> {
     let minio = get_minio();
 
     let is_bucket_exist = match minio.bucket_exists(&config::CONFIG.minio_bucket).await {
@@ -121,7 +121,10 @@ pub async fn upload_to_minio(
     }
 
     let link = match minio
-        .presigned_get_object(PresignedArgs::new(&config::CONFIG.minio_bucket, filename))
+        .presigned_get_object(PresignedArgs::new(
+            &config::CONFIG.minio_bucket,
+            filename.clone(),
+        ))
         .await
     {
         Ok(v) => v,
@@ -130,7 +133,15 @@ pub async fn upload_to_minio(
         }
     };
 
-    Ok(link)
+    let obj_size = match minio
+        .stat_object(&config::CONFIG.minio_bucket, filename.clone())
+        .await
+    {
+        Ok(v) => v.unwrap().size().try_into().unwrap(),
+        Err(_) => todo!(),
+    };
+
+    Ok((link, obj_size))
 }
 
 pub async fn create_archive(
@@ -241,7 +252,7 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
 
     set_progress_description(key.clone(), "Сборка архива...".to_string()).await;
 
-    let (archive_result, content_size) =
+    let (archive_result, _inside_content_size) =
         match create_archive(key.clone(), books, data.file_format).await {
             Ok(v) => v,
             Err(err) => {
@@ -253,7 +264,7 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
 
     set_progress_description(key.clone(), "Загрузка архива...".to_string()).await;
 
-    let link = match upload_to_minio(archive_result, final_filename.clone()).await {
+    let (link, content_size) = match upload_to_minio(archive_result, final_filename.clone()).await {
         Ok(v) => v,
         Err(err) => {
             set_task_error(key.clone(), "Failed uploading archive!".to_string()).await;
