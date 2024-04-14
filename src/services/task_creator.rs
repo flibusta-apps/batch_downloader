@@ -93,8 +93,11 @@ pub async fn set_progress_description(key: String, description: String) {
 
 pub async fn upload_to_minio(
     archive: SpooledTempFile,
+    folder_name: String,
     filename: String,
 ) -> Result<(String, u64), Box<dyn std::error::Error + Send + Sync>> {
+    let full_filename = format!("{}/{}", folder_name, filename);
+
     let minio = get_minio();
 
     let is_bucket_exist = match minio.bucket_exists(&config::CONFIG.minio_bucket).await {
@@ -111,7 +114,7 @@ pub async fn upload_to_minio(
     if let Err(err) = minio
         .put_object_stream(
             &config::CONFIG.minio_bucket,
-            filename.clone(),
+            full_filename.clone(),
             Box::pin(data_stream),
             None,
         )
@@ -123,7 +126,7 @@ pub async fn upload_to_minio(
     let link = match minio
         .presigned_get_object(PresignedArgs::new(
             &config::CONFIG.minio_bucket,
-            filename.clone(),
+            full_filename.clone(),
         ))
         .await
     {
@@ -134,7 +137,7 @@ pub async fn upload_to_minio(
     };
 
     let obj_size = match minio
-        .stat_object(&config::CONFIG.minio_bucket, filename.clone())
+        .stat_object(&config::CONFIG.minio_bucket, full_filename.clone())
         .await
     {
         Ok(v) => v.unwrap().size().try_into().unwrap(),
@@ -198,7 +201,7 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         ObjectType::Sequence => {
             get_books(
                 data.object_id,
-                data.allowed_langs,
+                data.allowed_langs.clone(),
                 get_sequence_books,
                 data.file_format.clone(),
             )
@@ -207,7 +210,7 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         ObjectType::Author => {
             get_books(
                 data.object_id,
-                data.allowed_langs,
+                data.allowed_langs.clone(),
                 get_author_books,
                 data.file_format.clone(),
             )
@@ -216,7 +219,7 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         ObjectType::Translator => {
             get_books(
                 data.object_id,
-                data.allowed_langs,
+                data.allowed_langs.clone(),
                 get_translator_books,
                 data.file_format.clone(),
             )
@@ -264,14 +267,21 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
 
     set_progress_description(key.clone(), "Загрузка архива...".to_string()).await;
 
-    let (link, content_size) = match upload_to_minio(archive_result, final_filename.clone()).await {
-        Ok(v) => v,
-        Err(err) => {
-            set_task_error(key.clone(), "Failed uploading archive!".to_string()).await;
-            log::error!("{}", err);
-            return;
-        }
+    let folder_name = {
+        let mut langs = data.allowed_langs.clone();
+        langs.sort();
+        langs.join("_")
     };
+
+    let (link, content_size) =
+        match upload_to_minio(archive_result, folder_name, final_filename.clone()).await {
+            Ok(v) => v,
+            Err(err) => {
+                set_task_error(key.clone(), "Failed uploading archive!".to_string()).await;
+                log::error!("{}", err);
+                return;
+            }
+        };
 
     let task = Task {
         id: key.clone(),
