@@ -12,7 +12,7 @@ pub fn get_minio() -> Minio {
     Minio::builder()
         .endpoint(&config::CONFIG.minio_host)
         .provider(provider)
-        .secure(false)
+        .secure(true)
         .build()
         .unwrap()
 }
