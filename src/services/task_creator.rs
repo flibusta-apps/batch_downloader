@@ -100,7 +100,6 @@ pub async fn upload_to_minio(
     let full_filename = format!("{}/{}", folder_name, filename);
 
     let internal_minio = get_internal_minio();
-    let minio = get_minio();
 
     let is_bucket_exist = match internal_minio
         .bucket_exists(&config::CONFIG.minio_bucket)
@@ -111,7 +110,9 @@ pub async fn upload_to_minio(
     };
 
     if !is_bucket_exist {
-        let _ = minio.make_bucket(&config::CONFIG.minio_bucket, false).await;
+        let _ = internal_minio
+            .make_bucket(&config::CONFIG.minio_bucket, false)
+            .await;
     }
 
     let data_stream = get_stream(Box::new(archive));
@@ -127,6 +128,8 @@ pub async fn upload_to_minio(
     {
         return Err(Box::new(err));
     }
+
+    let minio = get_minio();
 
     let link = match minio
         .presigned_get_object(PresignedArgs::new(
