@@ -20,6 +20,7 @@ use crate::{
 
 use super::{
     library_client::{get_author_books, get_sequence_books, get_translator_books, Book, Page},
+    minio::get_internal_minio,
     utils::get_key,
 };
 
@@ -98,9 +99,13 @@ pub async fn upload_to_minio(
 ) -> Result<(String, u64), Box<dyn std::error::Error + Send + Sync>> {
     let full_filename = format!("{}/{}", folder_name, filename);
 
+    let internal_minio = get_internal_minio();
     let minio = get_minio();
 
-    let is_bucket_exist = match minio.bucket_exists(&config::CONFIG.minio_bucket).await {
+    let is_bucket_exist = match internal_minio
+        .bucket_exists(&config::CONFIG.minio_bucket)
+        .await
+    {
         Ok(v) => v,
         Err(err) => return Err(Box::new(err)),
     };
@@ -111,7 +116,7 @@ pub async fn upload_to_minio(
 
     let data_stream = get_stream(Box::new(archive));
 
-    if let Err(err) = minio
+    if let Err(err) = internal_minio
         .put_object_stream(
             &config::CONFIG.minio_bucket,
             full_filename.clone(),
@@ -136,7 +141,7 @@ pub async fn upload_to_minio(
         }
     };
 
-    let obj_size = match minio
+    let obj_size = match internal_minio
         .stat_object(&config::CONFIG.minio_bucket, full_filename.clone())
         .await
     {

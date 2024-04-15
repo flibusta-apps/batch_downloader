@@ -16,3 +16,18 @@ pub fn get_minio() -> Minio {
         .build()
         .unwrap()
 }
+
+pub fn get_internal_minio() -> Minio {
+    let provider = StaticProvider::new(
+        &config::CONFIG.minio_access_key,
+        &config::CONFIG.minio_secret_key,
+        None,
+    );
+
+    Minio::builder()
+        .endpoint(&config::CONFIG.internal_minio_host)
+        .provider(provider)
+        .secure(false)
+        .build()
+        .unwrap()
+}
