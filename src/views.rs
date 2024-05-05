@@ -26,8 +26,15 @@ use crate::{
 
 pub static TASK_RESULTS: Lazy<Cache<String, Task>> = Lazy::new(|| {
     Cache::builder()
-        .time_to_idle(Duration::from_secs(12 * 60 * 60))
+        .time_to_idle(Duration::from_secs(3 * 60 * 60))
         .max_capacity(2048)
+        .async_eviction_listener(|_key, value: Task, _reason| {
+            Box::pin(async move {
+                if let Some(result_filename) = value.result_filename {
+                    let _ = tokio::fs::remove_file(format!("/tmp/{}", result_filename)).await;
+                }
+            })
+        })
         .build()
 });
 
