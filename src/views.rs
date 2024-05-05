@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use axum::{
+    body::Body,
     extract::Path,
     http::{self, Request, StatusCode},
     middleware::{self, Next},
@@ -11,6 +12,8 @@ use axum::{
 use axum_prometheus::PrometheusMetricLayer;
 use moka::future::Cache;
 use once_cell::sync::Lazy;
+use tokio::fs::File;
+use tokio_util::io::ReaderStream;
 use tower_http::trace::{self, TraceLayer};
 
 use tracing::Level;
@@ -71,6 +74,22 @@ async fn auth(req: Request<axum::body::Body>, next: Next) -> Result<Response, St
     Ok(next.run(req).await)
 }
 
+async fn download(Path(task_id): Path<String>) -> impl IntoResponse {
+    let task = match TASK_RESULTS.get(&task_id).await {
+        Some(result) => result,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    let file = match File::open(format!("/tmp/{}", task.id)).await {
+        Ok(v) => v,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    let stream = ReaderStream::new(file);
+
+    Body::from_stream(stream).into_response()
+}
+
 pub async fn get_router() -> Router {
     let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
 
@@ -80,6 +99,7 @@ pub async fn get_router() -> Router {
             "/api/check_archive/:task_id",
             get(check_archive_task_status),
         )
+        .route("/api/download/:task_id", get(download))
         .layer(middleware::from_fn(auth))
         .layer(prometheus_layer);
 

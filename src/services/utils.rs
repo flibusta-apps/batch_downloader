@@ -1,12 +1,14 @@
 use async_stream::stream;
 use bytes::{Buf, Bytes};
-use minio_rsc::error::Error;
 use reqwest::Response;
 use smartstring::alias::String as SmartString;
 use tempfile::SpooledTempFile;
 use translit::{gost779b_ru, CharsMapping, Transliterator};
 
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::{
+    error::Error,
+    io::{Read, Seek, SeekFrom, Write},
+};
 
 use crate::structures::{CreateTask, ObjectType};
 
@@ -56,7 +58,7 @@ pub async fn response_to_tempfile(res: &mut Response) -> Option<(SpooledTempFile
 
 pub fn get_stream(
     mut temp_file: Box<dyn Read + Send + Sync>,
-) -> impl futures_core::Stream<Item = Result<Bytes, Error>> {
+) -> impl futures_core::Stream<Item = Result<Bytes, Box<dyn Error + Sync>>> {
     stream! {
         let mut buf = [0; 2048];
 

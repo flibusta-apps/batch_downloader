@@ -33,8 +33,7 @@ pub struct Task {
     pub status: TaskStatus,
     pub status_description: String,
     pub error_message: Option<String>,
+
     pub result_filename: Option<String>,
-    pub result_link: Option<String>,
-    pub result_internal_link: Option<String>,
     pub content_size: Option<u64>,
 }
