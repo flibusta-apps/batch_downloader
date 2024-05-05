@@ -106,7 +106,6 @@ pub async fn get_router() -> Router {
             "/api/check_archive/:task_id",
             get(check_archive_task_status),
         )
-        .route("/api/download/:task_id", get(download))
         .layer(middleware::from_fn(auth))
         .layer(prometheus_layer);
 
@@ -114,6 +113,7 @@ pub async fn get_router() -> Router {
         Router::new().route("/metrics", get(|| async move { metric_handle.render() }));
 
     Router::new()
+        .route("/api/download/:task_id", get(download))
         .nest("/", app_router)
         .nest("/", metric_router)
         .layer(
