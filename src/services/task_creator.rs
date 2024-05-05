@@ -71,6 +71,7 @@ pub async fn set_task_error(key: String, error_message: String) {
         status_description: "Ошибка!".to_string(),
         error_message: Some(error_message),
         result_filename: None,
+        result_internal_link: None,
         result_link: None,
         content_size: None,
     };
@@ -85,6 +86,7 @@ pub async fn set_progress_description(key: String, description: String) {
         status_description: description,
         error_message: None,
         result_filename: None,
+        result_internal_link: None,
         result_link: None,
         content_size: None,
     };
@@ -96,7 +98,7 @@ pub async fn upload_to_minio(
     archive: SpooledTempFile,
     folder_name: String,
     filename: String,
-) -> Result<(String, u64), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(String, String, u64), Box<dyn std::error::Error + Send + Sync>> {
     let full_filename = format!("{}/{}", folder_name, filename);
 
     let internal_minio = get_internal_minio();
@@ -144,6 +146,19 @@ pub async fn upload_to_minio(
         }
     };
 
+    let internal_link = match internal_minio
+        .presigned_get_object(PresignedArgs::new(
+            &config::CONFIG.minio_bucket,
+            full_filename.clone(),
+        ))
+        .await
+    {
+        Ok(v) => v,
+        Err(err) => {
+            return Err(Box::new(err));
+        }
+    };
+
     let obj_size = match internal_minio
         .stat_object(&config::CONFIG.minio_bucket, full_filename.clone())
         .await
@@ -152,7 +167,7 @@ pub async fn upload_to_minio(
         Err(_) => todo!(),
     };
 
-    Ok((link, obj_size))
+    Ok((link, internal_link, obj_size))
 }
 
 pub async fn create_archive(
@@ -281,7 +296,7 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         langs.join("_")
     };
 
-    let (link, content_size) =
+    let (link, internal_link, content_size) =
         match upload_to_minio(archive_result, folder_name, final_filename.clone()).await {
             Ok(v) => v,
             Err(err) => {
@@ -297,6 +312,7 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         status_description: "Архив готов! Ожидайте файл".to_string(),
         error_message: None,
         result_filename: Some(final_filename),
+        result_internal_link: Some(internal_link),
         result_link: Some(link),
         content_size: Some(content_size),
     };
@@ -313,6 +329,7 @@ pub async fn create_task(data: CreateTask) -> Task {
         status_description: "Подготовка".to_string(),
         error_message: None,
         result_filename: None,
+        result_internal_link: None,
         result_link: None,
         content_size: None,
     };
