@@ -12,11 +12,6 @@ use tracing_subscriber::{filter, layer::SubscriberExt, util::SubscriberInitExt};
 use crate::views::get_router;
 
 async fn start_app() {
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .compact()
-        .init();
-
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
 
     let app = get_router().await;
