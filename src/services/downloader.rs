@@ -4,6 +4,7 @@ use base64::{engine::general_purpose, Engine};
 use reqwest::StatusCode;
 use smartstring::alias::String as SmartString;
 use tempfile::SpooledTempFile;
+use tracing::log;
 
 use crate::config;
 
@@ -54,7 +55,13 @@ pub async fn download(
     .unwrap()
     .to_string();
 
-    let output_file = response_to_tempfile(&mut response).await.unwrap();
+    let output_file = match response_to_tempfile(&mut response).await {
+        Ok(v) => v,
+        Err(err) => {
+            log::error!("Error: {}", err);
+            return Err(err);
+        }
+    };
 
     Ok((output_file.0, filename))
 }

@@ -23,7 +23,9 @@ pub fn get_key(input_data: CreateTask) -> String {
     format!("{:x}", md5::compute(data_string))
 }
 
-pub async fn response_to_tempfile(res: &mut Response) -> Option<(SpooledTempFile, usize)> {
+pub async fn response_to_tempfile(
+    res: &mut Response,
+) -> Result<(SpooledTempFile, usize), Box<dyn std::error::Error + Send + Sync>> {
     let mut tmp_file = tempfile::spooled_tempfile(5 * 1024 * 1024);
 
     let mut data_size: usize = 0;
@@ -34,7 +36,7 @@ pub async fn response_to_tempfile(res: &mut Response) -> Option<(SpooledTempFile
 
             let result = match chunk {
                 Ok(v) => v,
-                Err(_) => return None,
+                Err(err) => return Err(Box::new(err)),
             };
 
             let data = match result {
@@ -46,14 +48,16 @@ pub async fn response_to_tempfile(res: &mut Response) -> Option<(SpooledTempFile
 
             match tmp_file.write(data.chunk()) {
                 Ok(_) => (),
-                Err(_) => return None,
+                Err(err) => {
+                    return Err(Box::new(err));
+                }
             }
         }
 
         tmp_file.seek(SeekFrom::Start(0)).unwrap();
     }
 
-    Some((tmp_file, data_size))
+    Ok((tmp_file, data_size))
 }
 
 pub fn get_stream(
