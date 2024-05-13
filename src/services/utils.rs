@@ -46,12 +46,7 @@ pub async fn response_to_tempfile(
 
             data_size += data.len();
 
-            match tmp_file.write(data.chunk()) {
-                Ok(_) => (),
-                Err(err) => {
-                    return Err(Box::new(err));
-                }
-            }
+            tmp_file.write_all(data.chunk())?;
         }
 
         tmp_file.seek(SeekFrom::Start(0)).unwrap();

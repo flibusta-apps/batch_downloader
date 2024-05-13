@@ -1,3 +1,4 @@
+use once_cell::sync::Lazy;
 use serde::{de::DeserializeOwned, Deserialize};
 use smallvec::SmallVec;
 use smartstring::alias::String as SmartString;
@@ -5,6 +6,7 @@ use tracing::log;
 
 use crate::config;
 
+pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
 const PAGE_SIZE: &str = "50";
 
 fn get_allowed_langs_params(
@@ -23,7 +25,7 @@ async fn _make_request<T>(
 where
     T: DeserializeOwned,
 {
-    let response = reqwest::Client::new()
+    let response = CLIENT
         .get(format!("{}{}", &config::CONFIG.library_url, url))
         .query(&params)
         .header("Authorization", &config::CONFIG.library_api_key)

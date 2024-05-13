@@ -1,6 +1,7 @@
 use std::fmt;
 
 use base64::{engine::general_purpose, Engine};
+use once_cell::sync::Lazy;
 use reqwest::StatusCode;
 use smartstring::alias::String as SmartString;
 use tempfile::SpooledTempFile;
@@ -9,6 +10,8 @@ use tracing::log;
 use crate::config;
 
 use super::utils::response_to_tempfile;
+
+pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
 
 #[derive(Debug, Clone)]
 struct DownloadError {
@@ -27,7 +30,7 @@ pub async fn download(
     book_id: u64,
     file_type: SmartString,
 ) -> Result<(SpooledTempFile, String), Box<dyn std::error::Error + Send + Sync>> {
-    let mut response = reqwest::Client::new()
+    let mut response = CLIENT
         .get(format!(
             "{}/api/v1/download/{book_id}/{file_type}/",
             &config::CONFIG.cache_url
