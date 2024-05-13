@@ -30,9 +30,7 @@ pub static TASK_RESULTS: Lazy<Cache<String, Task>> = Lazy::new(|| {
         .max_capacity(2048)
         .async_eviction_listener(|_key, value: Task, _reason| {
             Box::pin(async move {
-                if let Some(result_filename) = value.result_filename {
-                    let _ = tokio::fs::remove_file(format!("/tmp/{}", result_filename)).await;
-                }
+                let _ = tokio::fs::remove_file(format!("/tmp/{}", value.id)).await;
             })
         })
         .build()
