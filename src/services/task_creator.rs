@@ -98,13 +98,19 @@ pub async fn create_archive(
     let books_count = books.len();
     let mut bytes_count: u64 = 0;
 
+    let mut filenames: Vec<String> = vec![];
+
     for (index, book) in books.iter().enumerate() {
         let (mut tmp_file, filename) = match download(book.id, file_format.clone()).await {
             Ok(v) => v,
             Err(_) => continue,
         };
 
-        match archive.start_file::<std::string::String, ()>(filename, options) {
+        if filenames.contains(&filename) {
+            continue;
+        }
+
+        match archive.start_file::<std::string::String, ()>(filename.clone(), options) {
             Ok(_) => (),
             Err(err) => return Err(Box::new(err)),
         };
@@ -113,6 +119,8 @@ pub async fn create_archive(
             Ok(file_bytes_count) => bytes_count += file_bytes_count,
             Err(err) => return Err(Box::new(err)),
         };
+
+        filenames.push(filename);
 
         set_progress_description(
             key.clone(),
