@@ -1,4 +1,4 @@
-use std::{fs::File, io::Seek};
+use std::{fs::File, io::Write};
 
 use smallvec::SmallVec;
 use smartstring::alias::String as SmartString;
@@ -134,7 +134,7 @@ pub async fn create_archive(
         Err(err) => return Err(Box::new(err)),
     };
 
-    archive_result.rewind().unwrap();
+    archive_result.flush()?;
 
     Ok((archive_result, bytes_count))
 }

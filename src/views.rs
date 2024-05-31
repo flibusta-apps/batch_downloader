@@ -10,7 +10,7 @@ use axum::{
     Json, Router,
 };
 use axum_prometheus::PrometheusMetricLayer;
-use moka::future::Cache;
+use moka::{future::Cache, notification::RemovalCause};
 use once_cell::sync::Lazy;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
@@ -28,8 +28,12 @@ pub static TASK_RESULTS: Lazy<Cache<String, Task>> = Lazy::new(|| {
     Cache::builder()
         .time_to_idle(Duration::from_secs(3 * 60 * 60))
         .max_capacity(2048)
-        .async_eviction_listener(|_key, value: Task, _reason| {
+        .async_eviction_listener(|_key, value: Task, reason| {
             Box::pin(async move {
+                if reason == RemovalCause::Replaced {
+                    return;
+                }
+
                 let _ = tokio::fs::remove_file(format!("/tmp/{}", value.id)).await;
             })
         })
