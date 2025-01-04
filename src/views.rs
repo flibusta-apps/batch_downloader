@@ -114,10 +114,12 @@ pub async fn get_router() -> Router {
     let metric_router =
         Router::new().route("/metrics", get(|| async move { metric_handle.render() }));
 
+    let public_router = Router::new().route("/api/download/{task_id}", get(download));
+
     Router::new()
-        .route("/api/download/{task_id}", get(download))
-        .nest("/", app_router)
-        .nest("/", metric_router)
+        .merge(public_router)
+        .merge(app_router)
+        .merge(metric_router)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
