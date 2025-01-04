@@ -105,7 +105,7 @@ pub async fn get_router() -> Router {
     let app_router = Router::new()
         .route("/api/", post(create_archive_task))
         .route(
-            "/api/check_archive/:task_id",
+            "/api/check_archive/{task_id}",
             get(check_archive_task_status),
         )
         .layer(middleware::from_fn(auth))
@@ -115,7 +115,7 @@ pub async fn get_router() -> Router {
         Router::new().route("/metrics", get(|| async move { metric_handle.render() }));
 
     Router::new()
-        .route("/api/download/:task_id", get(download))
+        .route("/api/download/{task_id}", get(download))
         .nest("/", app_router)
         .nest("/", metric_router)
         .layer(
