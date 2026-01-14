@@ -99,6 +99,10 @@ async fn download(Path(task_id): Path<String>) -> impl IntoResponse {
     Body::from_stream(stream).into_response()
 }
 
+async fn health_check() -> impl IntoResponse {
+    StatusCode::OK
+}
+
 pub async fn get_router() -> Router {
     let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
 
@@ -114,7 +118,9 @@ pub async fn get_router() -> Router {
     let metric_router =
         Router::new().route("/metrics", get(|| async move { metric_handle.render() }));
 
-    let public_router = Router::new().route("/api/download/{task_id}", get(download));
+    let public_router = Router::new()
+        .route("/api/download/{task_id}", get(download))
+        .route("/health", get(health_check));
 
     Router::new()
         .merge(public_router)
