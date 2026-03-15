@@ -1,14 +1,10 @@
-use async_stream::stream;
-use bytes::{Buf, Bytes};
+use bytes::Buf;
 use reqwest::Response;
 use smartstring::alias::String as SmartString;
 use tempfile::SpooledTempFile;
 use translit::{gost779b_ru, CharsMapping, Transliterator};
 
-use std::{
-    error::Error,
-    io::{Read, Seek, SeekFrom, Write},
-};
+use std::io::{Seek, SeekFrom, Write};
 
 use crate::structures::{CreateTask, ObjectType};
 
@@ -53,22 +49,6 @@ pub async fn response_to_tempfile(
     }
 
     Ok((tmp_file, data_size))
-}
-
-pub fn get_stream(
-    mut temp_file: Box<dyn Read + Send + Sync>,
-) -> impl futures_core::Stream<Item = Result<Bytes, Box<dyn Error + Sync>>> {
-    stream! {
-        let mut buf = [0; 2048];
-
-        while let Ok(count) = temp_file.read(&mut buf) {
-            if count == 0 {
-                break;
-            }
-
-            yield Ok(Bytes::copy_from_slice(&buf[0..count]))
-        }
-    }
 }
 
 pub async fn get_filename(
