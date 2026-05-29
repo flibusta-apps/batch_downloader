@@ -25,6 +25,10 @@ pub struct CreateTask {
     pub object_type: ObjectType,
     pub file_format: SmartString,
     pub allowed_langs: SmallVec<[SmartString; 3]>,
+
+    /// Optional user ID forwarded to TFCS as X-User-Id for per-user rate limiting.
+    #[serde(default)]
+    pub user_id: Option<i64>,
 }
 
 #[derive(Serialize, Clone)]

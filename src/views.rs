@@ -40,7 +40,18 @@ pub static TASK_RESULTS: Lazy<Cache<String, Task>> = Lazy::new(|| {
         .build()
 });
 
-async fn create_archive_task(Json(data): Json<CreateTask>) -> impl IntoResponse {
+async fn create_archive_task(
+    headers: axum::http::HeaderMap,
+    Json(mut data): Json<CreateTask>,
+) -> impl IntoResponse {
+    // Derive user_id exclusively from X-User-Id header (authoritative source).
+    // Never trust user_id from the JSON body — it could allow impersonation.
+    // If header is absent → None (anonymous), avoiding dummy sentinel values.
+    data.user_id = headers
+        .get("X-User-Id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i64>().ok());
+
     let key = get_key(data.clone());
 
     let result = match TASK_RESULTS.get(&key).await {

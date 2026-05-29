@@ -1,17 +1,12 @@
 use std::fmt;
 
 use base64::{engine::general_purpose, Engine};
-use once_cell::sync::Lazy;
 use reqwest::StatusCode;
 use smartstring::alias::String as SmartString;
 use tempfile::SpooledTempFile;
 use tracing::log;
 
-use crate::config;
-
-use super::utils::response_to_tempfile;
-
-pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+use super::{cache_client, utils::response_to_tempfile};
 
 #[derive(Debug, Clone)]
 struct DownloadError {
@@ -29,23 +24,22 @@ impl std::error::Error for DownloadError {}
 pub async fn download(
     book_id: u64,
     file_type: SmartString,
+    user_id: Option<i64>,
 ) -> Result<(SpooledTempFile, String), Box<dyn std::error::Error + Send + Sync>> {
-    let mut response = CLIENT
-        .get(format!(
-            "{}/api/v1/download/{book_id}/{file_type}/",
-            &config::CONFIG.cache_url
-        ))
-        .header("Authorization", &config::CONFIG.cache_api_key)
-        .send()
-        .await?
-        .error_for_status()?;
+    let response = cache_client::cache_download(book_id, &file_type, user_id).await?;
 
-    if response.status() != StatusCode::OK {
-        return Err(Box::new(DownloadError {
-            status_code: response.status(),
-        }));
+    match response.status() {
+        StatusCode::OK => {}
+        // 429 is handled by cache_client::cache_download returning CacheClientError::RateLimited
+        // which propagates up as-is
+        status => {
+            return Err(Box::new(DownloadError {
+                status_code: status,
+            }));
+        }
     };
 
+    let mut response = response;
     let headers = response.headers();
 
     let base64_encoder = general_purpose::STANDARD;
