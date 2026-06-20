@@ -29,6 +29,16 @@ pub struct CreateTask {
     /// Optional user ID forwarded to TFCS as X-User-Id for per-user rate limiting.
     #[serde(default)]
     pub user_id: Option<i64>,
+
+    /// Normalize the generated archive filename (transliterate via GOST 7.79B).
+    /// `true` (default) preserves the legacy behaviour.
+    /// `false` keeps the original Cyrillic in the filename.
+    #[serde(default = "default_true")]
+    pub normalized: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Serialize, Clone)]

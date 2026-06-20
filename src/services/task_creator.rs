@@ -195,15 +195,21 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         return;
     }
 
-    let final_filename =
-        match get_filename(data.object_type, data.object_id, data.file_format.clone()).await {
-            Ok(v) => v,
-            Err(err) => {
-                set_task_error(key.clone(), "Can't get archive name!".to_string()).await;
-                log::error!("{}", err);
-                return;
-            }
-        };
+    let final_filename = match get_filename(
+        data.object_type,
+        data.object_id,
+        data.file_format.clone(),
+        data.normalized,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(err) => {
+            set_task_error(key.clone(), "Can't get archive name!".to_string()).await;
+            log::error!("{}", err);
+            return;
+        }
+    };
 
     set_progress_description(key.clone(), "Сборка архива...".to_string()).await;
 
