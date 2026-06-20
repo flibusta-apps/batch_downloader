@@ -184,13 +184,20 @@ pub async fn cache_get(
 }
 
 /// GET a download resource from TFCS (cache hit download).
+///
+/// `normalized` is forwarded to TFCS as a `?normalized=` query parameter.
+/// TFCS is expected to use it to control the script of the filename returned
+/// in the `x-filename-b64` response header. If TFCS does not recognize the
+/// parameter, it is silently ignored and the call still succeeds.
 pub async fn cache_download(
     object_id: u64,
     object_type: &str,
     user_id: Option<i64>,
+    normalized: bool,
 ) -> Result<Response, CacheClientError> {
     let path = format!("/api/v1/download/{object_id}/{object_type}/");
-    let builder = build_request(reqwest::Method::GET, &path, user_id);
+    let builder =
+        build_request(reqwest::Method::GET, &path, user_id).query(&[("normalized", normalized)]);
     let request = builder.build()?;
 
     call_with_retry(request).await
@@ -265,5 +272,27 @@ impl From<reqwest::Error> for CacheClientError {
 impl From<RateLimitError> for CacheClientError {
     fn from(e: RateLimitError) -> Self {
         CacheClientError::RateLimited(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_request;
+
+    /// `cache_download` must always include `?normalized=` so that TFCS
+    /// (or any future consumer) can react to the flag. This guards against
+    /// accidental removal of `.query(&[("normalized", ...)])`.
+    #[test]
+    fn cache_download_query_includes_normalized() {
+        for normalized in [true, false] {
+            let builder = build_request(reqwest::Method::GET, "/api/v1/download/42/fb2/", None)
+                .query(&[("normalized", normalized)]);
+
+            let url = builder.build().unwrap().url().to_string();
+            assert!(
+                url.contains(&format!("normalized={normalized}")),
+                "expected `normalized={normalized}` in URL, got: {url}"
+            );
+        }
     }
 }

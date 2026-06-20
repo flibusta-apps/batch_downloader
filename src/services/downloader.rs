@@ -25,8 +25,9 @@ pub async fn download(
     book_id: u64,
     file_type: SmartString,
     user_id: Option<i64>,
+    normalized: bool,
 ) -> Result<(SpooledTempFile, String), Box<dyn std::error::Error + Send + Sync>> {
-    let response = cache_client::cache_download(book_id, &file_type, user_id).await?;
+    let response = cache_client::cache_download(book_id, &file_type, user_id, normalized).await?;
 
     match response.status() {
         StatusCode::OK => {}

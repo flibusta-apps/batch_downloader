@@ -87,6 +87,7 @@ pub async fn create_archive(
     books: Vec<Book>,
     file_format: SmartString,
     user_id: Option<i64>,
+    normalized: bool,
 ) -> Result<(File, u64), Box<dyn std::error::Error + Send + Sync>> {
     let output_file = File::create(format!("/tmp/{}", key))?;
     let mut archive = zip::ZipWriter::new(output_file);
@@ -102,18 +103,19 @@ pub async fn create_archive(
     let mut filenames: Vec<String> = vec![];
 
     for (index, book) in books.iter().enumerate() {
-        let (mut tmp_file, filename) = match download(book.id, file_format.clone(), user_id).await {
-            Ok(v) => v,
-            Err(err) => {
-                // Propagate rate limit errors immediately — do not silently skip.
-                // Other errors (network, missing file) are tolerated and skipped.
-                if err.downcast_ref::<cache_client::RateLimitError>().is_some() {
-                    return Err(err);
+        let (mut tmp_file, filename) =
+            match download(book.id, file_format.clone(), user_id, normalized).await {
+                Ok(v) => v,
+                Err(err) => {
+                    // Propagate rate limit errors immediately — do not silently skip.
+                    // Other errors (network, missing file) are tolerated and skipped.
+                    if err.downcast_ref::<cache_client::RateLimitError>().is_some() {
+                        return Err(err);
+                    }
+                    log::warn!("Skipping book {} due to error: {}", book.id, err);
+                    continue;
                 }
-                log::warn!("Skipping book {} due to error: {}", book.id, err);
-                continue;
-            }
-        };
+            };
 
         if filenames.contains(&filename) {
             continue;
@@ -213,15 +215,22 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
 
     set_progress_description(key.clone(), "Сборка архива...".to_string()).await;
 
-    let (archive_result, _inside_content_size) =
-        match create_archive(key.clone(), books, data.file_format, data.user_id).await {
-            Ok(v) => v,
-            Err(err) => {
-                set_task_error(key.clone(), "Failed downloading books!".to_string()).await;
-                log::error!("{}", err);
-                return;
-            }
-        };
+    let (archive_result, _inside_content_size) = match create_archive(
+        key.clone(),
+        books,
+        data.file_format,
+        data.user_id,
+        data.normalized,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(err) => {
+            set_task_error(key.clone(), "Failed downloading books!".to_string()).await;
+            log::error!("{}", err);
+            return;
+        }
+    };
 
     set_progress_description(key.clone(), "Загрузка архива...".to_string()).await;
 
