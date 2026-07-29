@@ -54,7 +54,7 @@ pub async fn response_to_tempfile(
             tmp_file.write_all(data.chunk())?;
         }
 
-        tmp_file.seek(SeekFrom::Start(0)).unwrap();
+        tmp_file.seek(SeekFrom::Start(0))?;
     }
 
     Ok((tmp_file, data_size))

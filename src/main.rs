@@ -17,15 +17,20 @@ async fn start_app() {
     let app = get_router().await;
 
     info!("Start webserver...");
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .expect("failed to bind webserver address 0.0.0.0:8080");
+    axum::serve(listener, app).await.expect("axum server error");
     info!("Webserver shutdown...");
 }
 
 #[tokio::main]
 async fn main() {
     let options = ClientOptions {
-        dsn: Some(Dsn::from_str(&config::CONFIG.sentry_dsn).unwrap()),
+        dsn: Some(
+            Dsn::from_str(&config::CONFIG.sentry_dsn)
+                .expect("SENTRY_DSN must be a valid DSN string"),
+        ),
         default_integrations: false,
         ..Default::default()
     }

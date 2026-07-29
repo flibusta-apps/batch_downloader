@@ -234,13 +234,26 @@ pub async fn create_archive_task(token: String, data: CreateTask) {
 
     set_progress_description(token.clone(), "Загрузка архива...".to_string()).await;
 
+    let meta = match archive_result.metadata() {
+        Ok(v) => v,
+        Err(err) => {
+            set_task_error(
+                token.clone(),
+                "Failed getting archive metadata!".to_string(),
+            )
+            .await;
+            log::error!("{}", err);
+            return;
+        }
+    };
+
     let task = Task {
         id: token.clone(),
         status: crate::structures::TaskStatus::Complete,
         status_description: "Архив готов! Ожидайте файл".to_string(),
         error_message: None,
         result_filename: Some(final_filename),
-        content_size: Some(archive_result.metadata().unwrap().len()),
+        content_size: Some(meta.len()),
     };
 
     TASK_RESULTS.insert(token.clone(), task.clone()).await;
