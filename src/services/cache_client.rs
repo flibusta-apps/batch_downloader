@@ -278,12 +278,32 @@ impl From<RateLimitError> for CacheClientError {
 #[cfg(test)]
 mod tests {
     use super::build_request;
+    use std::sync::Once;
+
+    /// `build_request` reads `crate::config::CONFIG`, a `once_cell::sync::Lazy`
+    /// that panics on first access if the required env vars are unset. Since a
+    /// panicked `Lazy` poisons itself for the rest of the process, any other
+    /// test in the binary that touches `CONFIG` afterwards would fail too.
+    /// Set harmless fake values before first access so this test module never
+    /// depends on (or interferes with) the real environment.
+    fn ensure_test_env() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            std::env::set_var("API_KEY", "test-api-key");
+            std::env::set_var("LIBRARY_API_KEY", "test-library-key");
+            std::env::set_var("LIBRARY_URL", "http://localhost:0");
+            std::env::set_var("CACHE_API_KEY", "test-cache-key");
+            std::env::set_var("CACHE_URL", "http://localhost:0");
+            std::env::set_var("SENTRY_DSN", "https://public@example.com/1");
+        });
+    }
 
     /// `cache_download` must always include `?normalized=` so that TFCS
     /// (or any future consumer) can react to the flag. This guards against
     /// accidental removal of `.query(&[("normalized", ...)])`.
     #[test]
     fn cache_download_query_includes_normalized() {
+        ensure_test_env();
         for normalized in [true, false] {
             let builder = build_request(reqwest::Method::GET, "/api/v1/download/42/fb2/", None)
                 .query(&[("normalized", normalized)]);
