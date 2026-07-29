@@ -145,8 +145,12 @@ pub async fn get_router() -> Router {
         .layer(middleware::from_fn(auth))
         .layer(prometheus_layer);
 
-    let metric_router =
-        Router::new().route("/metrics", get(|| async move { metric_handle.render() }));
+    // `/metrics` exposes internal request paths/status codes/latencies.
+    // Require the same API key as the rest of the authenticated surface —
+    // see README for the operational note this implies for the scrape config.
+    let metric_router = Router::new()
+        .route("/metrics", get(|| async move { metric_handle.render() }))
+        .layer(middleware::from_fn(auth));
 
     let public_router = Router::new()
         .route("/api/download/{task_id}", get(download))
@@ -339,5 +343,40 @@ mod tests {
         assert_eq!(&bytes[..], b"zip-bytes");
 
         let _ = tokio::fs::remove_file(format!("/tmp/{token}")).await;
+    }
+
+    #[tokio::test]
+    async fn metrics_requires_auth() {
+        ensure_test_env();
+        let app = test_router().await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn metrics_accessible_with_valid_api_key() {
+        ensure_test_env();
+        let app = test_router().await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header("Authorization", "test-api-key")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
