@@ -12,6 +12,7 @@ use axum::{
 use axum_prometheus::PrometheusMetricLayer;
 use moka::{future::Cache, notification::RemovalCause};
 use once_cell::sync::Lazy;
+use subtle::ConstantTimeEq;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 use tower_http::trace::{self, TraceLayer};
@@ -85,6 +86,10 @@ async fn check_archive_task_status(Path(task_id): Path<String>) -> impl IntoResp
     }
 }
 
+fn api_keys_match(provided: &str, expected: &str) -> bool {
+    provided.as_bytes().ct_eq(expected.as_bytes()).into()
+}
+
 async fn auth(req: Request<axum::body::Body>, next: Next) -> Result<Response, StatusCode> {
     let auth_header = req
         .headers()
@@ -97,7 +102,7 @@ async fn auth(req: Request<axum::body::Body>, next: Next) -> Result<Response, St
         return Err(StatusCode::UNAUTHORIZED);
     };
 
-    if auth_header != CONFIG.api_key {
+    if !api_keys_match(auth_header, &CONFIG.api_key) {
         return Err(StatusCode::UNAUTHORIZED);
     }
 
@@ -187,6 +192,13 @@ mod tests {
             user_id: None,
             normalized: true,
         }
+    }
+
+    #[test]
+    fn api_keys_match_uses_constant_time_comparison() {
+        assert!(api_keys_match("secret-key", "secret-key"));
+        assert!(!api_keys_match("secret-key", "wrong-key"));
+        assert!(!api_keys_match("short", "much-longer-secret-key"));
     }
 
     #[tokio::test]

@@ -377,6 +377,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "smartstring",
+ "subtle",
  "tempfile",
  "tokio",
  "tokio-util",
