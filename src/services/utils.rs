@@ -19,6 +19,15 @@ pub fn get_key(input_data: CreateTask) -> String {
     format!("{:x}", md5::compute(data_string))
 }
 
+/// Generates a cryptographically random 128-bit download token, hex-encoded
+/// (32 chars). Unlike `get_key` (a deterministic MD5 of guessable request
+/// fields), this cannot be derived offline and is what gets exposed as
+/// `Task.id` / the download URL.
+pub fn generate_token() -> String {
+    let bytes: [u8; 16] = rand::random();
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
 pub async fn response_to_tempfile(
     res: &mut Response,
 ) -> Result<(SpooledTempFile, usize), Box<dyn std::error::Error + Send + Sync>> {
@@ -179,7 +188,21 @@ pub fn normalize_filename(input: &str, normalized: bool, file_format: &str) -> S
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_filename;
+    use super::{generate_token, normalize_filename};
+
+    #[test]
+    fn generate_token_is_32_hex_chars() {
+        let token = generate_token();
+        assert_eq!(token.len(), 32);
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn generate_token_is_random() {
+        let a = generate_token();
+        let b = generate_token();
+        assert_ne!(a, b);
+    }
 
     #[test]
     fn normalized_true_transliterates() {
