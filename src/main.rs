@@ -9,10 +9,37 @@ use std::{net::SocketAddr, str::FromStr};
 use tracing::info;
 use tracing_subscriber::{filter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::views::get_router;
+use crate::views::{cleanup_stale_archives, get_router};
+
+/// Resolves on the first of SIGINT (ctrl_c) or SIGTERM, whichever arrives
+/// first, so `axum::serve` can stop accepting new connections and let
+/// in-flight requests drain instead of being killed mid-response.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install ctrl_c signal handler");
+    };
+
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM signal handler")
+            .recv()
+            .await;
+    };
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    info!("Shutdown signal received, draining in-flight requests...");
+}
 
 async fn start_app() {
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+
+    cleanup_stale_archives().await;
 
     let app = get_router().await;
 
@@ -20,7 +47,10 @@ async fn start_app() {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .expect("failed to bind webserver address 0.0.0.0:8080");
-    axum::serve(listener, app).await.expect("axum server error");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("axum server error");
     info!("Webserver shutdown...");
 }
 

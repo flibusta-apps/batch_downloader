@@ -1,4 +1,4 @@
-use std::{fs::File, io::Write};
+use std::{fs::File, io::Write, time::Duration};
 
 use smallvec::SmallVec;
 use smartstring::alias::String as SmartString;
@@ -15,6 +15,13 @@ use super::{
     library_client::{get_author_books, get_sequence_books, get_translator_books, Book, Page},
     utils::generate_token,
 };
+
+/// Hard upper bound on how long a single archive-creation task may run.
+/// Generous enough to allow large archives to finish, but bounded so a task
+/// can never get stuck forever (see Problem 03.1 in
+/// docs/specs/03-task-lifecycle-stuck-and-lost-tasks.md). If this elapses,
+/// the task is marked as failed so it always reaches a terminal status.
+const MAX_TASK_DURATION: Duration = Duration::from_secs(30 * 60);
 
 pub async fn get_books<Fut>(
     object_id: u32,
@@ -89,6 +96,10 @@ pub async fn create_archive(
     user_id: Option<i64>,
     normalized: bool,
 ) -> Result<(File, u64), Box<dyn std::error::Error + Send + Sync>> {
+    // Best-effort cleanup of any stale partial file left behind by a previous
+    // run reusing this token, so we never append to/serve stale content
+    // (see Problem 03.4 in docs/specs/03-task-lifecycle-stuck-and-lost-tasks.md).
+    let _ = std::fs::remove_file(format!("/tmp/{}", token));
     let output_file = File::create(format!("/tmp/{}", token))?;
     let mut archive = zip::ZipWriter::new(output_file);
 
@@ -274,7 +285,14 @@ pub async fn create_task(data: CreateTask, dedup_key: String) -> Task {
     TASK_RESULTS.insert(token.clone(), task.clone()).await;
     DEDUP_INDEX.insert(dedup_key, token.clone()).await;
 
-    tokio::spawn(create_archive_task(token, data));
+    tokio::spawn(async move {
+        if tokio::time::timeout(MAX_TASK_DURATION, create_archive_task(token.clone(), data))
+            .await
+            .is_err()
+        {
+            set_task_error(token, "Task timed out".to_string()).await;
+        }
+    });
 
     task
 }

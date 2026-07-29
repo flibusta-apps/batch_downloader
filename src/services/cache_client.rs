@@ -1,11 +1,26 @@
 use once_cell::sync::Lazy;
 use reqwest::{Request, Response, StatusCode};
 use serde::Deserialize;
+use std::time::Duration;
 use tracing::warn;
 
 use crate::config;
 
-pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+/// Time allowed to establish a TCP/TLS connection to TFCS before giving up.
+/// Kept short since TFCS is an internal service and should respond quickly.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Total time allowed for a single request (connect + send + receive) to TFCS.
+/// Bounds worst-case latency per call so upstream calls never hang indefinitely
+/// (see Problem 03.1 in docs/specs/03-task-lifecycle-stuck-and-lost-tasks.md).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .expect("failed to build reqwest client for TFCS")
+});
 
 const MAX_RETRIES: u32 = 3;
 const DEFAULT_RETRY_AFTER_SECS: u64 = 5;

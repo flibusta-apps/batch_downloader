@@ -2,11 +2,28 @@ use once_cell::sync::Lazy;
 use serde::{de::DeserializeOwned, Deserialize};
 use smallvec::SmallVec;
 use smartstring::alias::String as SmartString;
+use std::time::Duration;
 use tracing::log;
 
 use crate::config;
 
-pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+/// Time allowed to establish a TCP/TLS connection to the library service
+/// before giving up. Kept short since it is an internal service.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Total time allowed for a single request (connect + send + receive) to the
+/// library service. Bounds worst-case latency per call so upstream calls
+/// never hang indefinitely (see Problem 03.1 in
+/// docs/specs/03-task-lifecycle-stuck-and-lost-tasks.md). Kept consistent
+/// with `cache_client::REQUEST_TIMEOUT`.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .expect("failed to build reqwest client for library service")
+});
 const PAGE_SIZE: &str = "50";
 
 fn get_allowed_langs_params(

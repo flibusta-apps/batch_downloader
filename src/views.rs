@@ -25,9 +25,21 @@ use crate::{
     structures::{CreateTask, Task, TaskStatus},
 };
 
+/// `time_to_idle` alone only bounds how long an *unpolled* task survives —
+/// a client (or an attacker) that keeps polling `check_archive`/`download`
+/// resets the idle timer indefinitely, so a download link could in theory
+/// live forever. `time_to_live` adds a hard upper bound independent of
+/// access patterns: 24 hours is comfortably longer than any realistic
+/// archive build + download window (builds are minutes, downloads are
+/// typically started within an hour of completion), while still giving a
+/// concrete, documented expiry for "how long is a download link valid"
+/// (see README's Operational notes section).
+const TASK_RESULT_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
 pub static TASK_RESULTS: Lazy<Cache<String, Task>> = Lazy::new(|| {
     Cache::builder()
         .time_to_idle(Duration::from_secs(3 * 60 * 60))
+        .time_to_live(TASK_RESULT_TTL)
         .max_capacity(2048)
         .async_eviction_listener(|_key, value: Task, reason| {
             Box::pin(async move {
@@ -51,6 +63,58 @@ pub static DEDUP_INDEX: Lazy<Cache<String, String>> = Lazy::new(|| {
         .max_capacity(2048)
         .build()
 });
+
+/// Removes orphaned archive files left behind in `/tmp` from a previous
+/// process run. `TASK_RESULTS` (and therefore the eviction listener that
+/// normally deletes `/tmp/{id}` on eviction) lives only in memory, so on a
+/// restart every in-flight/completed task's on-disk archive is orphaned —
+/// nothing will ever clean it up otherwise. Only files whose name is an
+/// exact match for the archive token format (32 lowercase hex chars, no
+/// extension — see `generate_token()`) are removed, so unrelated `/tmp`
+/// entries are left untouched.
+pub async fn cleanup_stale_archives() {
+    fn is_archive_token(name: &str) -> bool {
+        name.len() == 32
+            && name
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    }
+
+    let mut entries = match tokio::fs::read_dir("/tmp").await {
+        Ok(entries) => entries,
+        Err(err) => {
+            tracing::warn!("cleanup_stale_archives: failed to read /tmp: {err}");
+            return;
+        }
+    };
+
+    loop {
+        let entry = match entries.next_entry().await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(err) => {
+                tracing::warn!("cleanup_stale_archives: failed to read /tmp entry: {err}");
+                continue;
+            }
+        };
+
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+
+        if !is_archive_token(name) {
+            continue;
+        }
+
+        if let Err(err) = tokio::fs::remove_file(entry.path()).await {
+            tracing::warn!(
+                "cleanup_stale_archives: failed to remove stale archive {}: {err}",
+                entry.path().display()
+            );
+        }
+    }
+}
 
 async fn create_archive_task(
     headers: axum::http::HeaderMap,
