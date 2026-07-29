@@ -40,6 +40,17 @@ pub static TASK_RESULTS: Lazy<Cache<String, Task>> = Lazy::new(|| {
         .build()
 });
 
+/// Maps the internal MD5 dedup key (`utils::get_key`) to the random download
+/// token currently representing that request, so identical concurrent
+/// requests reuse one task without ever exposing the guessable MD5 as
+/// `Task.id`.
+pub static DEDUP_INDEX: Lazy<Cache<String, String>> = Lazy::new(|| {
+    Cache::builder()
+        .time_to_idle(Duration::from_secs(3 * 60 * 60))
+        .max_capacity(2048)
+        .build()
+});
+
 async fn create_archive_task(
     headers: axum::http::HeaderMap,
     Json(mut data): Json<CreateTask>,
@@ -52,17 +63,16 @@ async fn create_archive_task(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<i64>().ok());
 
-    let key = get_key(data.clone());
+    let dedup_key = get_key(data.clone());
 
-    let result = match TASK_RESULTS.get(&key).await {
-        Some(result) => {
-            if result.status == TaskStatus::Failed {
-                create_task(data).await
-            } else {
-                result
-            }
-        }
-        None => create_task(data).await,
+    let existing_task = match DEDUP_INDEX.get(&dedup_key).await {
+        Some(token) => TASK_RESULTS.get(&token).await,
+        None => None,
+    };
+
+    let result = match existing_task {
+        Some(task) if task.status != TaskStatus::Failed => task,
+        _ => create_task(data, dedup_key).await,
     };
 
     Json::<Task>(result).into_response()
@@ -142,4 +152,90 @@ pub async fn get_router() -> Router {
                 .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
                 .on_response(trace::DefaultOnResponse::new().level(Level::INFO)),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::structures::ObjectType;
+    use smallvec::smallvec;
+    use std::sync::Once;
+
+    pub(super) fn ensure_test_env() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            std::env::set_var("API_KEY", "test-api-key");
+            std::env::set_var("LIBRARY_API_KEY", "test-library-key");
+            std::env::set_var("LIBRARY_URL", "http://localhost:0");
+            std::env::set_var("CACHE_API_KEY", "test-cache-key");
+            std::env::set_var("CACHE_URL", "http://localhost:0");
+            std::env::set_var("SENTRY_DSN", "https://public@example.com/1");
+        });
+    }
+
+    fn sample_task_data(object_id: u32) -> CreateTask {
+        CreateTask {
+            object_id,
+            object_type: ObjectType::Author,
+            file_format: "fb2".into(),
+            allowed_langs: smallvec!["ru".into()],
+            user_id: None,
+            normalized: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_archive_task_reuses_existing_non_failed_task_via_dedup_index() {
+        let data = sample_task_data(424242);
+        let dedup_key = get_key(data.clone());
+        let seeded_token = "seeded-token-reuse-test".to_string();
+
+        TASK_RESULTS
+            .insert(
+                seeded_token.clone(),
+                Task {
+                    id: seeded_token.clone(),
+                    status: TaskStatus::InProgress,
+                    status_description: "Подготовка".into(),
+                    error_message: None,
+                    result_filename: None,
+                    content_size: None,
+                },
+            )
+            .await;
+        DEDUP_INDEX
+            .insert(dedup_key.clone(), seeded_token.clone())
+            .await;
+
+        let response = create_archive_task(axum::http::HeaderMap::new(), Json(data))
+            .await
+            .into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["id"].as_str().unwrap(), seeded_token);
+        assert_ne!(json["id"].as_str().unwrap(), dedup_key);
+    }
+
+    #[tokio::test]
+    async fn create_archive_task_generates_random_token_not_md5_key() {
+        ensure_test_env();
+        let data = sample_task_data(434343);
+        let dedup_key = get_key(data.clone());
+
+        let response = create_archive_task(axum::http::HeaderMap::new(), Json(data))
+            .await
+            .into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let id = json["id"].as_str().unwrap();
+
+        assert_ne!(id, dedup_key);
+        assert_eq!(id.len(), 32);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
 }

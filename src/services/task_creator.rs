@@ -8,12 +8,12 @@ use zip::write::FileOptions;
 use crate::{
     services::{cache_client, downloader::download, utils::get_filename},
     structures::{CreateTask, ObjectType, Task},
-    views::TASK_RESULTS,
+    views::{DEDUP_INDEX, TASK_RESULTS},
 };
 
 use super::{
     library_client::{get_author_books, get_sequence_books, get_translator_books, Book, Page},
-    utils::get_key,
+    utils::generate_token,
 };
 
 pub async fn get_books<Fut>(
@@ -56,9 +56,9 @@ where
     Ok(result)
 }
 
-pub async fn set_task_error(key: String, error_message: String) {
+pub async fn set_task_error(token: String, error_message: String) {
     let task = Task {
-        id: key.clone(),
+        id: token.clone(),
         status: crate::structures::TaskStatus::Failed,
         status_description: "Ошибка!".to_string(),
         error_message: Some(error_message),
@@ -66,12 +66,12 @@ pub async fn set_task_error(key: String, error_message: String) {
         content_size: None,
     };
 
-    TASK_RESULTS.insert(key, task.clone()).await;
+    TASK_RESULTS.insert(token, task.clone()).await;
 }
 
-pub async fn set_progress_description(key: String, description: String) {
+pub async fn set_progress_description(token: String, description: String) {
     let task = Task {
-        id: key.clone(),
+        id: token.clone(),
         status: crate::structures::TaskStatus::InProgress,
         status_description: description,
         error_message: None,
@@ -79,17 +79,17 @@ pub async fn set_progress_description(key: String, description: String) {
         content_size: None,
     };
 
-    TASK_RESULTS.insert(key, task.clone()).await;
+    TASK_RESULTS.insert(token, task.clone()).await;
 }
 
 pub async fn create_archive(
-    key: String,
+    token: String,
     books: Vec<Book>,
     file_format: SmartString,
     user_id: Option<i64>,
     normalized: bool,
 ) -> Result<(File, u64), Box<dyn std::error::Error + Send + Sync>> {
-    let output_file = File::create(format!("/tmp/{}", key))?;
+    let output_file = File::create(format!("/tmp/{}", token))?;
     let mut archive = zip::ZipWriter::new(output_file);
 
     let options: FileOptions<_> = FileOptions::default()
@@ -134,7 +134,7 @@ pub async fn create_archive(
         filenames.push(filename);
 
         set_progress_description(
-            key.clone(),
+            token.clone(),
             format!("Загрузка книг: {}/{}", index + 1, books_count),
         )
         .await;
@@ -150,7 +150,7 @@ pub async fn create_archive(
     Ok((archive_result, bytes_count))
 }
 
-pub async fn create_archive_task(key: String, data: CreateTask) {
+pub async fn create_archive_task(token: String, data: CreateTask) {
     let books = match data.object_type {
         ObjectType::Sequence => {
             get_books(
@@ -181,19 +181,19 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         }
     };
 
-    set_progress_description(key.clone(), "Получение списка книг...".to_string()).await;
+    set_progress_description(token.clone(), "Получение списка книг...".to_string()).await;
 
     let books = match books {
         Ok(v) => v,
         Err(err) => {
-            set_task_error(key.clone(), "Failed getting books!".to_string()).await;
+            set_task_error(token.clone(), "Failed getting books!".to_string()).await;
             log::error!("{}", err);
             return;
         }
     };
 
     if books.is_empty() {
-        set_task_error(key.clone(), "No books!".to_string()).await;
+        set_task_error(token.clone(), "No books!".to_string()).await;
         return;
     }
 
@@ -207,16 +207,16 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
     {
         Ok(v) => v,
         Err(err) => {
-            set_task_error(key.clone(), "Can't get archive name!".to_string()).await;
+            set_task_error(token.clone(), "Can't get archive name!".to_string()).await;
             log::error!("{}", err);
             return;
         }
     };
 
-    set_progress_description(key.clone(), "Сборка архива...".to_string()).await;
+    set_progress_description(token.clone(), "Сборка архива...".to_string()).await;
 
     let (archive_result, _inside_content_size) = match create_archive(
-        key.clone(),
+        token.clone(),
         books,
         data.file_format,
         data.user_id,
@@ -226,16 +226,16 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
     {
         Ok(v) => v,
         Err(err) => {
-            set_task_error(key.clone(), "Failed downloading books!".to_string()).await;
+            set_task_error(token.clone(), "Failed downloading books!".to_string()).await;
             log::error!("{}", err);
             return;
         }
     };
 
-    set_progress_description(key.clone(), "Загрузка архива...".to_string()).await;
+    set_progress_description(token.clone(), "Загрузка архива...".to_string()).await;
 
     let task = Task {
-        id: key.clone(),
+        id: token.clone(),
         status: crate::structures::TaskStatus::Complete,
         status_description: "Архив готов! Ожидайте файл".to_string(),
         error_message: None,
@@ -243,14 +243,14 @@ pub async fn create_archive_task(key: String, data: CreateTask) {
         content_size: Some(archive_result.metadata().unwrap().len()),
     };
 
-    TASK_RESULTS.insert(key.clone(), task.clone()).await;
+    TASK_RESULTS.insert(token.clone(), task.clone()).await;
 }
 
-pub async fn create_task(data: CreateTask) -> Task {
-    let key = get_key(data.clone());
+pub async fn create_task(data: CreateTask, dedup_key: String) -> Task {
+    let token = generate_token();
 
     let task = Task {
-        id: key.clone(),
+        id: token.clone(),
         status: crate::structures::TaskStatus::InProgress,
         status_description: "Подготовка".to_string(),
         error_message: None,
@@ -258,9 +258,10 @@ pub async fn create_task(data: CreateTask) -> Task {
         content_size: None,
     };
 
-    TASK_RESULTS.insert(key.clone(), task.clone()).await;
+    TASK_RESULTS.insert(token.clone(), task.clone()).await;
+    DEDUP_INDEX.insert(dedup_key, token.clone()).await;
 
-    tokio::spawn(create_archive_task(key, data));
+    tokio::spawn(create_archive_task(token, data));
 
     task
 }
