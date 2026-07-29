@@ -110,6 +110,10 @@ async fn download(Path(task_id): Path<String>) -> impl IntoResponse {
         None => return StatusCode::NOT_FOUND.into_response(),
     };
 
+    if task.status != TaskStatus::Complete {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
     let file = match File::open(format!("/tmp/{}", task.id)).await {
         Ok(v) => v,
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
@@ -160,6 +164,7 @@ mod tests {
     use crate::structures::ObjectType;
     use smallvec::smallvec;
     use std::sync::Once;
+    use tower::ServiceExt;
 
     pub(super) fn ensure_test_env() {
         static INIT: Once = Once::new();
@@ -237,5 +242,90 @@ mod tests {
         assert_ne!(id, dedup_key);
         assert_eq!(id.len(), 32);
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    async fn test_router() -> Router {
+        static ROUTER: tokio::sync::OnceCell<Router> = tokio::sync::OnceCell::const_new();
+        ROUTER
+            .get_or_init(|| async { get_router().await })
+            .await
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn download_returns_404_for_in_progress_task() {
+        ensure_test_env();
+        let token = "test-download-in-progress".to_string();
+        tokio::fs::write(format!("/tmp/{token}"), b"partial-zip")
+            .await
+            .unwrap();
+        TASK_RESULTS
+            .insert(
+                token.clone(),
+                Task {
+                    id: token.clone(),
+                    status: TaskStatus::InProgress,
+                    status_description: "working".into(),
+                    error_message: None,
+                    result_filename: None,
+                    content_size: None,
+                },
+            )
+            .await;
+
+        let app = test_router().await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/download/{token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let _ = tokio::fs::remove_file(format!("/tmp/{token}")).await;
+    }
+
+    #[tokio::test]
+    async fn download_streams_file_only_when_complete() {
+        ensure_test_env();
+        let token = "test-download-complete".to_string();
+        tokio::fs::write(format!("/tmp/{token}"), b"zip-bytes")
+            .await
+            .unwrap();
+        TASK_RESULTS
+            .insert(
+                token.clone(),
+                Task {
+                    id: token.clone(),
+                    status: TaskStatus::Complete,
+                    status_description: "done".into(),
+                    error_message: None,
+                    result_filename: Some("archive.zip".into()),
+                    content_size: Some(9),
+                },
+            )
+            .await;
+
+        let app = test_router().await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/download/{token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&bytes[..], b"zip-bytes");
+
+        let _ = tokio::fs::remove_file(format!("/tmp/{token}")).await;
     }
 }

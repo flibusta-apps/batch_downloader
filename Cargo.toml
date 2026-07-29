@@ -55,3 +55,6 @@ async-stream = "0.3.6"
 translit = "0.6.0"
 
 sentry = { version = "0.42.0", features = ["debug-images"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
