@@ -1,0 +1,8 @@
+target
+.git
+.github
+.env*
+docs
+.zed
+.superpowers
+*.md
