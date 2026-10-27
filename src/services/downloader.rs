@@ -3,7 +3,6 @@ use std::fmt;
 use base64::{engine::general_purpose, Engine};
 use reqwest::StatusCode;
 use smartstring::alias::String as SmartString;
-use tempfile::SpooledTempFile;
 use tracing::log;
 
 use super::{cache_client, utils::response_to_tempfile};
@@ -38,10 +37,36 @@ fn extract_filename(
         .map_err(|err| format!("invalid base64 in x-filename-b64 header: {err}"))?;
 
     let filename = std::str::from_utf8(&decoded)
-        .map_err(|err| format!("x-filename-b64 header decoded to invalid UTF-8: {err}"))?
+        .map_err(|err| format!("x-filename-b64 header decoded to invalid UTF-8: {err}"))?;
+
+    Ok(sanitize_filename(filename))
+}
+
+/// Reduces an untrusted filename to a safe basename: no path components
+/// (zip-slip), no control characters, never empty / `.` / `..`.
+pub fn sanitize_filename(raw: &str) -> String {
+    let base = raw.rsplit(['/', '\\']).next().unwrap_or("");
+    let cleaned: String = base
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .trim_start_matches('.')
         .to_string();
 
-    Ok(filename)
+    if cleaned.is_empty() {
+        "file".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// True when the error is a (retries exhausted) TFCS rate limit.
+pub fn is_rate_limited(err: &(dyn std::error::Error + 'static)) -> bool {
+    matches!(
+        err.downcast_ref::<cache_client::CacheClientError>(),
+        Some(cache_client::CacheClientError::RateLimited(_))
+    )
 }
 
 pub async fn download(
@@ -49,13 +74,13 @@ pub async fn download(
     file_type: SmartString,
     user_id: Option<i64>,
     normalized: bool,
-) -> Result<(SpooledTempFile, String), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(std::fs::File, String), Box<dyn std::error::Error + Send + Sync>> {
     let response = cache_client::cache_download(book_id, &file_type, user_id, normalized).await?;
 
     match response.status() {
         StatusCode::OK => {}
-        // 429 is handled by cache_client::cache_download returning CacheClientError::RateLimited
-        // which propagates up as-is
+        // 429 is handled by cache_client::cache_download returning
+        // CacheClientError::RateLimited which propagates up as-is.
         status => {
             return Err(Box::new(DownloadError {
                 status_code: status,
@@ -79,7 +104,7 @@ pub async fn download(
 
 #[cfg(test)]
 mod tests {
-    use super::extract_filename;
+    use super::{extract_filename, sanitize_filename};
     use base64::{engine::general_purpose, Engine};
     use reqwest::header::{HeaderMap, HeaderValue};
 
@@ -123,5 +148,16 @@ mod tests {
 
         let result = extract_filename(&headers);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn sanitize_strips_path_components_and_control_chars() {
+        assert_eq!(sanitize_filename("../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_filename("..\\..\\evil.fb2"), "evil.fb2");
+        assert_eq!(sanitize_filename("/abs/path/book.fb2"), "book.fb2");
+        assert_eq!(sanitize_filename("bo\u{0}o\nk.fb2"), "book.fb2");
+        assert_eq!(sanitize_filename(".."), "file");
+        assert_eq!(sanitize_filename("a/"), "file");
+        assert_eq!(sanitize_filename(".hidden.fb2"), "hidden.fb2");
     }
 }

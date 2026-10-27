@@ -43,7 +43,7 @@ where
     T: DeserializeOwned,
 {
     let response = CLIENT
-        .get(format!("{}{}", &config::CONFIG.library_url, url))
+        .get(format!("{}{}", config::CONFIG.library_url, url))
         .query(&params)
         .header("Authorization", &config::CONFIG.library_api_key)
         .send()

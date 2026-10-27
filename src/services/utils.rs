@@ -1,17 +1,20 @@
-use bytes::Buf;
 use reqwest::Response;
 use smartstring::alias::String as SmartString;
-use tempfile::SpooledTempFile;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use translit::{gost779b_ru, CharsMapping, Transliterator};
 
-use std::io::{Seek, SeekFrom, Write};
+use std::io::SeekFrom;
 
 use crate::structures::{CreateTask, ObjectType};
 
 use super::library_client::{get_author, get_sequence};
 
+/// Dedup key of a request. `user_id` is intentionally excluded: it only
+/// affects upstream rate limiting, not the produced archive, so identical
+/// requests from different users share one task.
 pub fn get_key(input_data: CreateTask) -> String {
-    let mut data = input_data.clone();
+    let mut data = input_data;
+    data.user_id = None;
     data.allowed_langs.sort();
 
     let data_string = serde_json::to_string(&data).unwrap();
@@ -28,36 +31,24 @@ pub fn generate_token() -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+/// Streams the response body into an anonymous temp file without blocking
+/// the async runtime. The returned file is rewound to the start.
 pub async fn response_to_tempfile(
     res: &mut Response,
-) -> Result<(SpooledTempFile, usize), Box<dyn std::error::Error + Send + Sync>> {
-    let mut tmp_file = tempfile::spooled_tempfile(5 * 1024 * 1024);
+) -> Result<(std::fs::File, u64), Box<dyn std::error::Error + Send + Sync>> {
+    let mut tmp_file = tokio::fs::File::from_std(tempfile::tempfile()?);
 
-    let mut data_size: usize = 0;
+    let mut data_size: u64 = 0;
 
-    {
-        loop {
-            let chunk = res.chunk().await;
-
-            let result = match chunk {
-                Ok(v) => v,
-                Err(err) => return Err(Box::new(err)),
-            };
-
-            let data = match result {
-                Some(v) => v,
-                None => break,
-            };
-
-            data_size += data.len();
-
-            tmp_file.write_all(data.chunk())?;
-        }
-
-        tmp_file.seek(SeekFrom::Start(0))?;
+    while let Some(data) = res.chunk().await? {
+        data_size += data.len() as u64;
+        tmp_file.write_all(&data).await?;
     }
 
-    Ok((tmp_file, data_size))
+    tmp_file.flush().await?;
+    tmp_file.seek(SeekFrom::Start(0)).await?;
+
+    Ok((tmp_file.into_std().await, data_size))
 }
 
 /// Maximum size of the `<left>` part of the filename in UTF-8 bytes.
@@ -188,7 +179,25 @@ pub fn normalize_filename(input: &str, normalized: bool, file_format: &str) -> S
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_token, normalize_filename};
+    use super::{generate_token, get_key, normalize_filename};
+    use crate::structures::{CreateTask, ObjectType};
+
+    fn task(user_id: Option<i64>) -> CreateTask {
+        CreateTask {
+            object_id: 1,
+            object_type: ObjectType::Author,
+            file_format: "fb2".into(),
+            allowed_langs: smallvec::smallvec!["ru".into(), "en".into()],
+            user_id,
+            normalized: true,
+        }
+    }
+
+    #[test]
+    fn dedup_key_ignores_user_id() {
+        assert_eq!(get_key(task(Some(1))), get_key(task(Some(2))));
+        assert_eq!(get_key(task(None)), get_key(task(Some(2))));
+    }
 
     #[test]
     fn generate_token_is_32_hex_chars() {
