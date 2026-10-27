@@ -7,17 +7,17 @@ use tracing::warn;
 use crate::config;
 
 /// Time allowed to establish a TCP/TLS connection to TFCS before giving up.
-/// Kept short since TFCS is an internal service and should respond quickly.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// Total time allowed for a single request (connect + send + receive) to TFCS.
-/// Bounds worst-case latency per call so upstream calls never hang indefinitely
-/// (see Problem 03.1 in docs/specs/03-task-lifecycle-stuck-and-lost-tasks.md).
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Maximum silence between two body chunks / the response headers.
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
+/// Total time allowed for one download request (including the body).
+/// Downloads can be large, so this is much longer than a typical API call.
+const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
+        .read_timeout(READ_TIMEOUT)
         .build()
         .expect("failed to build reqwest client for TFCS")
 });
@@ -26,6 +26,8 @@ const MAX_RETRIES: u32 = 3;
 const DEFAULT_RETRY_AFTER_SECS: u64 = 5;
 /// Maximum backoff duration in seconds (cap exponential backoff).
 const MAX_BACKOFF_SECS: u64 = 300;
+/// Base backoff for transient (5xx / timeout / connect) errors.
+const TRANSIENT_BACKOFF_SECS: u64 = 1;
 
 /// Error returned when TFCS responds with 429 Too Many Requests
 /// after all retry attempts have been exhausted.
@@ -48,32 +50,24 @@ impl std::fmt::Display for RateLimitError {
 
 impl std::error::Error for RateLimitError {}
 
+/// C2 contract: `{"detail": "...", "retry_after_secs": N}` (extra fields ignored).
 #[derive(Deserialize)]
 struct RateLimitBody {
-    #[allow(dead_code)]
-    error: String,
-    #[allow(dead_code)]
-    operation: String,
     retry_after_secs: u64,
 }
 
 /// Extract retry_after from the response.
 /// Priority: `Retry-After` header > `retry_after_secs` from JSON body > default.
-///
-/// Note: this consumes the response body, so only call this when
-/// you no longer need the body for anything else.
 async fn extract_retry_after(response: Response) -> u64 {
-    // Try Retry-After header first (can be read from headers before consuming body)
     if let Some(header_val) = response
         .headers()
         .get("retry-after")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
     {
         return header_val;
     }
 
-    // Fallback: consume body and parse JSON
     if let Ok(body) = response.text().await {
         if let Ok(parsed) = serde_json::from_str::<RateLimitBody>(&body) {
             return parsed.retry_after_secs;
@@ -81,6 +75,18 @@ async fn extract_retry_after(response: Response) -> u64 {
     }
 
     DEFAULT_RETRY_AFTER_SECS
+}
+
+/// Exponential backoff `base * 2^(attempt-1)`, saturating and capped.
+fn backoff_secs(base: u64, attempt: u32) -> u64 {
+    let factor = 1u64
+        .checked_shl(attempt.saturating_sub(1))
+        .unwrap_or(u64::MAX);
+    base.saturating_mul(factor).min(MAX_BACKOFF_SECS)
+}
+
+fn is_transient_error(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect()
 }
 
 /// Extract a normalized operation name from a URL path.
@@ -106,7 +112,7 @@ fn build_request(
     path: &str,
     user_id: Option<i64>,
 ) -> reqwest::RequestBuilder {
-    let url = format!("{}{}", &config::CONFIG.cache_url, path);
+    let url = format!("{}{}", config::CONFIG.cache_url, path);
 
     let mut builder = CLIENT
         .request(method, &url)
@@ -119,13 +125,13 @@ fn build_request(
     builder
 }
 
-/// Send a request to TFCS with retry on 429 responses.
+/// Send a request to TFCS with retries.
 ///
-/// Retries up to MAX_RETRIES times with exponential backoff starting from
-/// the `Retry-After` value returned by TFCS.
-///
-/// Returns `Ok(Response)` for non-429 responses.
-/// Returns `Err(CacheClientError::RateLimited)` when all retries are exhausted.
+/// * 429: waits `Retry-After` (header or JSON `retry_after_secs`), growing
+///   exponentially and capped at `MAX_BACKOFF_SECS`; after `MAX_RETRIES`
+///   returns `Err(CacheClientError::RateLimited)`.
+/// * 5xx / timeouts / connect errors: retried with a small backoff; after the
+///   last attempt the 5xx response (or the error) is returned as is.
 pub async fn call_with_retry(request: Request) -> Result<Response, CacheClientError> {
     let mut attempt: u32 = 0;
     let user_id = request
@@ -135,18 +141,34 @@ pub async fn call_with_retry(request: Request) -> Result<Response, CacheClientEr
         .map(|s| s.to_string());
 
     loop {
-        // Clone the request before sending so we can retry.
-        // reqwest consumes the request body on send, so we need try_clone.
         let cloned = request
             .try_clone()
-            .ok_or_else(|| CacheClientError::CannotCloneRequest)?;
-        let response = CLIENT.execute(cloned).await?;
+            .ok_or(CacheClientError::CannotCloneRequest)?;
+        attempt += 1;
 
-        if response.status() != StatusCode::TOO_MANY_REQUESTS {
-            return Ok(response);
+        let response = match CLIENT.execute(cloned).await {
+            Ok(r) => r,
+            Err(err) if is_transient_error(&err) && attempt < MAX_RETRIES => {
+                let wait = backoff_secs(TRANSIENT_BACKOFF_SECS, attempt);
+                warn!(attempt, "TFCS transient error: {err}; retrying in {wait}s");
+                tokio::time::sleep(Duration::from_secs(wait)).await;
+                continue;
+            }
+            Err(err) => return Err(err.into()),
+        };
+
+        let status = response.status();
+
+        if status.is_server_error() && attempt < MAX_RETRIES {
+            let wait = backoff_secs(TRANSIENT_BACKOFF_SECS, attempt);
+            warn!(attempt, %status, "TFCS server error; retrying in {wait}s");
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+            continue;
         }
 
-        attempt += 1;
+        if status != StatusCode::TOO_MANY_REQUESTS {
+            return Ok(response);
+        }
 
         let retry_after = extract_retry_after(response).await;
         let operation = extract_operation(request.url().path());
@@ -156,8 +178,7 @@ pub async fn call_with_retry(request: Request) -> Result<Response, CacheClientEr
             retry_after_secs = retry_after,
             attempt,
             user_id = user_id.as_deref().unwrap_or("anonymous"),
-            "TFCS rate limit exceeded, retrying after {}s (attempt {}/{})",
-            retry_after,
+            "TFCS rate limit exceeded (attempt {}/{})",
             attempt,
             MAX_RETRIES
         );
@@ -170,40 +191,13 @@ pub async fn call_with_retry(request: Request) -> Result<Response, CacheClientEr
             }));
         }
 
-        // Exponential backoff: retry_after * 2^(attempt-1), capped at MAX_BACKOFF_SECS
-        let backoff_secs = (retry_after * 2u64.pow(attempt - 1)).min(MAX_BACKOFF_SECS);
-        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+        tokio::time::sleep(Duration::from_secs(backoff_secs(retry_after, attempt))).await;
     }
-}
-
-// ---- Public convenience functions ----
-
-/// GET a resource from TFCS (cache hit / cache hit copy).
-/// If `copy` is true, adds `?copy=true` query parameter.
-pub async fn cache_get(
-    object_id: u64,
-    object_type: &str,
-    copy: bool,
-    user_id: Option<i64>,
-) -> Result<Response, CacheClientError> {
-    let path = if copy {
-        format!("/api/v1/{object_id}/{object_type}/?copy=true")
-    } else {
-        format!("/api/v1/{object_id}/{object_type}/")
-    };
-
-    let builder = build_request(reqwest::Method::GET, &path, user_id);
-    let request = builder.build()?;
-
-    call_with_retry(request).await
 }
 
 /// GET a download resource from TFCS (cache hit download).
 ///
 /// `normalized` is forwarded to TFCS as a `?normalized=` query parameter.
-/// TFCS is expected to use it to control the script of the filename returned
-/// in the `x-filename-b64` response header. If TFCS does not recognize the
-/// parameter, it is silently ignored and the call still succeeds.
 pub async fn cache_download(
     object_id: u64,
     object_type: &str,
@@ -211,42 +205,12 @@ pub async fn cache_download(
     normalized: bool,
 ) -> Result<Response, CacheClientError> {
     let path = format!("/api/v1/download/{object_id}/{object_type}/");
-    let builder =
-        build_request(reqwest::Method::GET, &path, user_id).query(&[("normalized", normalized)]);
+    let builder = build_request(reqwest::Method::GET, &path, user_id)
+        .query(&[("normalized", normalized)])
+        .timeout(DOWNLOAD_TOTAL_TIMEOUT);
     let request = builder.build()?;
 
     call_with_retry(request).await
-}
-
-/// DELETE a resource from TFCS.
-///
-/// Note: TFCS does not rate-limit DELETE endpoints per its API contract,
-/// so no retry logic is applied here.
-pub async fn cache_delete(
-    object_id: u64,
-    object_type: &str,
-    user_id: Option<i64>,
-) -> Result<Response, CacheClientError> {
-    let path = format!("/api/v1/{object_id}/{object_type}/");
-    let builder = build_request(reqwest::Method::DELETE, &path, user_id);
-    let request = builder.build()?;
-    let response = CLIENT.execute(request).await?;
-    Ok(response)
-}
-
-/// POST to update_cache.
-///
-/// Note: TFCS does not rate-limit update_cache per its API contract,
-/// so no retry logic is applied here.
-pub async fn cache_update_cache(
-    body: impl serde::Serialize,
-    user_id: Option<i64>,
-) -> Result<Response, CacheClientError> {
-    let path = "/api/v1/update_cache";
-    let builder = build_request(reqwest::Method::POST, path, user_id);
-    let request = builder.json(&body).build()?;
-    let response = CLIENT.execute(request).await?;
-    Ok(response)
 }
 
 #[derive(Debug)]
@@ -292,8 +256,7 @@ impl From<RateLimitError> for CacheClientError {
 
 #[cfg(test)]
 mod tests {
-    use super::build_request;
-    use std::sync::Once;
+    use super::{backoff_secs, build_request, MAX_BACKOFF_SECS};
 
     /// `build_request` reads `crate::config::CONFIG`, a `once_cell::sync::Lazy`
     /// that panics on first access if the required env vars are unset. Since a
@@ -302,15 +265,15 @@ mod tests {
     /// Set harmless fake values before first access so this test module never
     /// depends on (or interferes with) the real environment.
     fn ensure_test_env() {
-        static INIT: Once = Once::new();
-        INIT.call_once(|| {
-            std::env::set_var("API_KEY", "test-api-key");
-            std::env::set_var("LIBRARY_API_KEY", "test-library-key");
-            std::env::set_var("LIBRARY_URL", "http://localhost:0");
-            std::env::set_var("CACHE_API_KEY", "test-cache-key");
-            std::env::set_var("CACHE_URL", "http://localhost:0");
-            std::env::set_var("SENTRY_DSN", "https://public@example.com/1");
-        });
+        crate::config::test_support::ensure_test_env();
+    }
+
+    #[test]
+    fn backoff_is_capped_and_never_overflows() {
+        assert_eq!(backoff_secs(5, 1), 5);
+        assert_eq!(backoff_secs(5, 2), 10);
+        assert_eq!(backoff_secs(5, 30), MAX_BACKOFF_SECS);
+        assert_eq!(backoff_secs(u64::MAX, 100), MAX_BACKOFF_SECS);
     }
 
     /// `cache_download` must always include `?normalized=` so that TFCS

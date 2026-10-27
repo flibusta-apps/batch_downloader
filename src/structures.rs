@@ -2,11 +2,10 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use smartstring::alias::String as SmartString;
 
-#[derive(Serialize, Clone, PartialEq)]
+#[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     InProgress,
-    Archiving,
     Complete,
     Failed,
 }
@@ -41,7 +40,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct Task {
     pub id: String,
     pub status: TaskStatus,

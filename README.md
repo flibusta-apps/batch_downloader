@@ -23,3 +23,12 @@ Independent of restarts, a completed task's download link also has a hard
 expiry: **24 hours** from creation, after which the task and its archive
 are evicted and the link stops working (see `TASK_RESULT_TTL` in
 `src/views.rs`), regardless of how recently it was polled.
+
+### Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SENTRY_DSN` | unset | Optional; Sentry disabled when empty |
+| `MAX_CONCURRENT_TASKS` | 4 | Archive tasks running in parallel |
+| `MAX_QUEUED_TASKS` | 32 | Tasks waiting for a slot; beyond that `POST /api/` returns 503 |
+| `DATA_DIR` | `/tmp/batch_downloader` | Directory for archives (wiped on startup) |

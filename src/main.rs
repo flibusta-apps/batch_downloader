@@ -3,13 +3,13 @@ pub mod services;
 pub mod structures;
 pub mod views;
 
-use sentry::{integrations::debug_images::DebugImagesIntegration, types::Dsn, ClientOptions};
+use sentry::{types::Dsn, ClientOptions};
 use sentry_tracing::EventFilter;
-use std::{net::SocketAddr, str::FromStr};
+use std::{net::SocketAddr, str::FromStr, time::Duration};
 use tracing::info;
-use tracing_subscriber::{filter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use crate::views::{cleanup_stale_archives, get_router};
+use crate::views::{cleanup_stale_archives, get_router, run_cache_maintenance};
 
 /// Resolves on the first of SIGINT (ctrl_c) or SIGTERM, whichever arrives
 /// first, so `axum::serve` can stop accepting new connections and let
@@ -43,6 +43,14 @@ async fn start_app() {
 
     let app = get_router().await;
 
+    tokio::spawn(async {
+        let mut ticker = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            ticker.tick().await;
+            run_cache_maintenance().await;
+        }
+    });
+
     info!("Start webserver...");
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
@@ -56,17 +64,14 @@ async fn start_app() {
 
 #[tokio::main]
 async fn main() {
-    let options = ClientOptions {
-        dsn: Some(
-            Dsn::from_str(&config::CONFIG.sentry_dsn)
-                .expect("SENTRY_DSN must be a valid DSN string"),
-        ),
-        default_integrations: false,
-        ..Default::default()
-    }
-    .add_integration(DebugImagesIntegration::new());
-
-    let _guard = sentry::init(options);
+    // Sentry is optional; the default integrations (incl. panic reporting)
+    // stay enabled.
+    let _guard = config::CONFIG.sentry_dsn.as_deref().map(|dsn| {
+        sentry::init(ClientOptions {
+            dsn: Some(Dsn::from_str(dsn).expect("SENTRY_DSN must be a valid DSN string")),
+            ..Default::default()
+        })
+    });
 
     let sentry_layer = sentry_tracing::layer().event_filter(|md| match md.level() {
         &tracing::Level::ERROR => EventFilter::Event,
@@ -75,7 +80,7 @@ async fn main() {
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_target(false))
-        .with(filter::LevelFilter::INFO)
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with(sentry_layer)
         .init();
 
