@@ -50,7 +50,7 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 
 base64 = "0.22.1"
 
-translit = "0.6.0"
+translit = "0.8.0"
 
 sentry = "0.42.0"
 
