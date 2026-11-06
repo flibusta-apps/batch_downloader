@@ -43,7 +43,7 @@ subtle = "2.6.1"
 
 smallvec = { version = "1.14.0", features = ["serde"] }
 smartstring = { version = "1.0.1", features = ["serde"] }
-reqwest = { version = "0.12.15", features = ["json"] }
+reqwest = { version = "0.13.5", features = ["json"] }
 
 tempfile = "3.19.1"
 zip = { version = "9", default-features = false, features = ["deflate"] }
