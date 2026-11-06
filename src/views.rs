@@ -59,6 +59,8 @@ pub static TASK_RESULTS: Lazy<Cache<String, Task>> = Lazy::new(|| {
 
 /// Tasks that are currently queued or running. Never evicted.
 static ACTIVE_TASKS: Lazy<Mutex<HashMap<String, Task>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+pub static ACTIVE_DEDUP: Lazy<Mutex<HashMap<String, String>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Stores the task state: in-progress tasks go to `ACTIVE_TASKS`, terminal
 /// ones move to the evictable `TASK_RESULTS`.
@@ -69,6 +71,14 @@ pub async fn put_task(task: Task) {
     } else {
         TASK_RESULTS.insert(token.clone(), task).await;
         ACTIVE_TASKS.lock().await.remove(&token);
+        let mut dedup = ACTIVE_DEDUP.lock().await;
+        if let Some(key) = dedup
+            .iter()
+            .find_map(|(key, value)| (value == &token).then(|| key.clone()))
+        {
+            DEDUP_INDEX.insert(key.clone(), token).await;
+            dedup.remove(&key);
+        }
     }
 }
 
@@ -138,7 +148,7 @@ pub async fn cleanup_stale_archives() {
             .await
             .map(|t| t.is_file())
             .unwrap_or(false);
-        if !is_file {
+        if !is_file || entry.file_name() == ".instance.lock" {
             continue;
         }
 
@@ -189,7 +199,9 @@ async fn check_archive_task_status(Path(task_id): Path<String>) -> impl IntoResp
 }
 
 fn api_keys_match(provided: &str, expected: &str) -> bool {
-    provided.as_bytes().ct_eq(expected.as_bytes()).into()
+    let raw = provided.as_bytes().ct_eq(expected.as_bytes());
+    let bearer = provided.strip_prefix("Bearer ").unwrap_or("");
+    bool::from(raw | bearer.as_bytes().ct_eq(expected.as_bytes()))
 }
 
 async fn auth(req: Request<axum::body::Body>, next: Next) -> Result<Response, StatusCode> {
@@ -351,6 +363,8 @@ mod tests {
     #[test]
     fn api_keys_match_uses_constant_time_comparison() {
         assert!(api_keys_match("secret-key", "secret-key"));
+        assert!(api_keys_match("Bearer secret-key", "secret-key"));
+        assert!(!api_keys_match("Bearer wrong-key", "secret-key"));
         assert!(!api_keys_match("secret-key", "wrong-key"));
         assert!(!api_keys_match("short", "much-longer-secret-key"));
     }
@@ -388,6 +402,38 @@ mod tests {
 
         assert_eq!(json["id"].as_str().unwrap(), seeded_token);
         assert_ne!(json["id"].as_str().unwrap(), dedup_key);
+    }
+
+    #[tokio::test]
+    async fn active_dedup_survives_terminal_cache_invalidation() {
+        ensure_test_env();
+        let data = sample_task_data(989898);
+        let key = get_key(data.clone());
+        let token = "non-evicting-dedup-test".to_string();
+        put_task(Task {
+            id: token.clone(),
+            status: TaskStatus::InProgress,
+            status_description: "queued".into(),
+            error_message: None,
+            result_filename: None,
+            content_size: None,
+        })
+        .await;
+        ACTIVE_DEDUP.lock().await.insert(key.clone(), token.clone());
+        DEDUP_INDEX.invalidate(&key).await;
+        let response = create_archive_task_with(data, noop_runner).await;
+        assert_eq!(body_json(response).await["id"], token);
+        put_task(Task {
+            id: token.clone(),
+            status: TaskStatus::Failed,
+            status_description: "failed".into(),
+            error_message: None,
+            result_filename: None,
+            content_size: None,
+        })
+        .await;
+        assert!(!ACTIVE_DEDUP.lock().await.contains_key(&key));
+        assert_eq!(DEDUP_INDEX.get(&key).await, Some(token));
     }
 
     #[tokio::test]
@@ -561,6 +607,23 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn metrics_accessible_with_bearer_api_key() {
+        ensure_test_env();
+        let response = test_router()
+            .await
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header("Authorization", "Bearer test-api-key")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
 }

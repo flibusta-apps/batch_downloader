@@ -1,10 +1,10 @@
-FROM rust:bookworm AS chef
+FROM rust:1-bookworm@sha256:77fac8b98f9f46062bb680b6d25d5bcaabfc400143952ebc572e924bcbedc3fa AS chef
 
 RUN apt-get update \
     && apt-get install -y cmake \
     && rm -rf /var/lib/apt/lists/*
 
-RUN cargo install cargo-chef --locked
+RUN cargo install cargo-chef --version 0.1.77 --locked
 
 WORKDIR /app
 
@@ -25,7 +25,7 @@ COPY . .
 RUN cargo build --release --bin batch_downloader
 
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 
 RUN apt-get update \
     && apt-get install -y openssl ca-certificates \

@@ -1,4 +1,5 @@
 pub mod config;
+mod instance_lock;
 pub mod services;
 pub mod structures;
 pub mod views;
@@ -39,6 +40,11 @@ async fn shutdown_signal() {
 async fn start_app() {
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
 
+    let _instance_lock = instance_lock::acquire(&config::CONFIG.data_dir)
+        .expect("DATA_DIR is already in use or cannot be locked");
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .expect("failed to bind webserver address 0.0.0.0:8080");
     cleanup_stale_archives().await;
 
     let app = get_router().await;
@@ -52,9 +58,6 @@ async fn start_app() {
     });
 
     info!("Start webserver...");
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .expect("failed to bind webserver address 0.0.0.0:8080");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await

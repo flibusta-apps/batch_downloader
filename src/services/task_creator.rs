@@ -2,10 +2,10 @@ use std::{
     collections::HashSet,
     fs::File,
     future::Future,
-    io::{BufWriter, Write},
+    io::{BufWriter, Read, Write},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -29,7 +29,7 @@ use crate::{
         utils::get_filename,
     },
     structures::{CreateTask, ObjectType, Task, TaskStatus},
-    views::{get_task, put_task, DEDUP_INDEX},
+    views::{get_task, put_task, ACTIVE_DEDUP, DEDUP_INDEX},
 };
 
 use super::{
@@ -37,8 +37,10 @@ use super::{
     utils::{generate_token, get_key},
 };
 
-/// A task is failed when it makes no progress for this long.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// Allow one legitimate cold-fill request plus scheduling/writer margin.
+fn idle_timeout(cache_timeout_secs: u64) -> Duration {
+    Duration::from_secs(cache_timeout_secs.saturating_add(60))
+}
 /// Absolute upper bound for one task, regardless of progress.
 const MAX_TASK_DURATION: Duration = Duration::from_secs(3 * 60 * 60);
 /// How often the watchdog checks the limits above.
@@ -68,7 +70,12 @@ pub struct TaskCtx {
     pub token: String,
     started: Instant,
     last_progress_ms: Arc<AtomicU64>,
+    cancelled: Arc<AtomicBool>,
+    writer: Arc<Mutex<Option<WriterHandle>>>,
 }
+
+type WriterHandle =
+    tokio::task::JoinHandle<Result<WriteSummary, Box<dyn std::error::Error + Send + Sync>>>;
 
 impl TaskCtx {
     pub fn new(token: String) -> Self {
@@ -76,6 +83,8 @@ impl TaskCtx {
             token,
             started: Instant::now(),
             last_progress_ms: Arc::new(AtomicU64::new(0)),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            writer: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -219,6 +228,7 @@ fn unique_name(used: &mut HashSet<String>, name: &str, book_id: u64) -> String {
 fn write_archive(
     path: &Path,
     mut rx: mpsc::Receiver<WriterItem>,
+    cancelled: &AtomicBool,
 ) -> Result<WriteSummary, Box<dyn std::error::Error + Send + Sync>> {
     let output = BufWriter::new(File::create(path)?);
     let mut archive = zip::ZipWriter::new(output);
@@ -226,6 +236,7 @@ fn write_archive(
     let options: FileOptions<()> = FileOptions::default()
         .compression_level(Some(COMPRESSION_LEVEL))
         .compression_method(zip::CompressionMethod::Deflated)
+        .large_file(true)
         .unix_permissions(0o644);
 
     let mut used = HashSet::new();
@@ -234,10 +245,23 @@ fn write_archive(
     while let Some(mut item) = rx.blocking_recv() {
         let name = unique_name(&mut used, &item.filename, item.book_id);
         archive.start_file(name, options)?;
-        std::io::copy(&mut item.file, &mut archive)?;
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err("archive cancelled".into());
+            }
+            let count = item.file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            archive.write_all(&buffer[..count])?;
+        }
         files += 1;
     }
 
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("archive cancelled".into());
+    }
     let mut inner = archive.finish()?;
     inner.flush()?;
     inner.into_inner().map_err(|e| e.into_error())?.sync_all()?;
@@ -258,7 +282,10 @@ pub async fn create_archive(
 ) -> Result<ArchiveSummary, Box<dyn std::error::Error + Send + Sync>> {
     let (tx, rx) = mpsc::channel::<WriterItem>(2);
     let path = output.to_path_buf();
-    let writer = tokio::task::spawn_blocking(move || write_archive(&path, rx));
+    let cancelled = ctx.cancelled.clone();
+    *ctx.writer.lock().await = Some(tokio::task::spawn_blocking(move || {
+        write_archive(&path, rx, &cancelled)
+    }));
 
     let total = books.len();
     let mut skipped = 0usize;
@@ -315,9 +342,10 @@ pub async fn create_archive(
     }
 
     drop(tx);
-    let summary = writer
-        .await
-        .map_err(|e| format!("archive writer task failed: {e}"))??;
+    let mut writer = ctx.writer.lock().await;
+    let result = writer.as_mut().expect("writer registered").await;
+    writer.take();
+    let summary = result.map_err(|e| format!("archive writer task failed: {e}"))??;
 
     if let Some(err) = fatal {
         return Err(err);
@@ -514,6 +542,15 @@ where
 
     let _lock = CREATE_LOCK.lock().await;
 
+    let active_token = ACTIVE_DEDUP.lock().await.get(&dedup_key).cloned();
+    if let Some(token) = active_token {
+        if let Some(task) = get_task(&token).await {
+            if task.status != TaskStatus::Failed {
+                return Ok(task);
+            }
+        }
+    }
+
     if let Some(token) = DEDUP_INDEX.get(&dedup_key).await {
         if let Some(task) = get_task(&token).await {
             if task.status != TaskStatus::Failed {
@@ -546,7 +583,7 @@ where
     };
 
     put_task(task.clone()).await;
-    DEDUP_INDEX.insert(dedup_key, token.clone()).await;
+    ACTIVE_DEDUP.lock().await.insert(dedup_key, token.clone());
 
     WAITING.fetch_add(1, Ordering::SeqCst);
 
@@ -564,14 +601,22 @@ where
             run_with_limits(
                 &limits_ctx,
                 fut,
-                IDLE_TIMEOUT,
+                idle_timeout(CONFIG.cache_request_timeout_secs),
                 MAX_TASK_DURATION,
                 WATCHDOG_INTERVAL,
             )
             .await
         });
 
-        match handle.await {
+        let outcome = handle.await;
+        // The task future has now been dropped (also on timeout/panic), closing
+        // its writer channel. Cancel and join the blocking writer BEFORE the
+        // terminal state, cleanup and concurrency permit release.
+        ctx.cancelled.store(true, Ordering::Relaxed);
+        if let Some(writer) = ctx.writer.lock().await.take() {
+            let _ = writer.await;
+        }
+        match outcome {
             Ok(Ok(())) => {}
             Ok(Err(reason)) => {
                 let msg = match reason {
@@ -598,6 +643,12 @@ where
 mod tests {
     use super::*;
     use std::io::Read;
+
+    #[test]
+    fn watchdog_idle_window_exceeds_cache_request_timeout() {
+        assert_eq!(idle_timeout(900), Duration::from_secs(960));
+        assert_eq!(idle_timeout(1), Duration::from_secs(61));
+    }
 
     #[test]
     fn unique_name_appends_book_id_on_collision() {
@@ -628,8 +679,14 @@ mod tests {
         }
         drop(tx);
 
-        let summary = write_archive(&out, rx).ok().unwrap();
+        let summary = write_archive(&out, rx, &AtomicBool::new(false))
+            .ok()
+            .unwrap();
         assert_eq!(summary.files, 2);
+        // ZIP64 local-header sizes are sentinel values even for this tiny
+        // fixture, proving large-file support is reserved before streaming.
+        let bytes = std::fs::read(&out).unwrap();
+        assert_eq!(&bytes[18..26], &[0xff; 8]);
 
         let mut zip = zip::ZipArchive::new(File::open(&out).unwrap()).unwrap();
         assert_eq!(zip.len(), 2);
@@ -639,6 +696,25 @@ mod tests {
             .read_to_string(&mut s)
             .unwrap();
         assert_eq!(s, "book2");
+    }
+
+    #[test]
+    fn cancelled_writer_does_not_consume_book() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel(1);
+        tx.blocking_send(WriterItem {
+            book_id: 1,
+            file: tempfile::tempfile().unwrap(),
+            filename: "book.fb2".into(),
+        })
+        .unwrap();
+        drop(tx);
+        assert!(write_archive(
+            &dir.path().join("cancelled.zip"),
+            rx,
+            &AtomicBool::new(true)
+        )
+        .is_err());
     }
 
     #[test]

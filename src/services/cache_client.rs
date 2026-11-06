@@ -8,21 +8,21 @@ use crate::config;
 
 /// Time allowed to establish a TCP/TLS connection to TFCS before giving up.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// Maximum silence between two body chunks / the response headers.
-const READ_TIMEOUT: Duration = Duration::from_secs(60);
-/// Total time allowed for one download request (including the body).
-/// Downloads can be large, so this is much longer than a typical API call.
-const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(180);
+/// Includes cold-fill download and Telegram upload before response headers.
+fn request_timeout() -> Duration {
+    Duration::from_secs(config::CONFIG.cache_request_timeout_secs)
+}
 
 pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
-        .read_timeout(READ_TIMEOUT)
+        .read_timeout(request_timeout())
+        .timeout(request_timeout())
         .build()
         .expect("failed to build reqwest client for TFCS")
 });
 
-const MAX_RETRIES: u32 = 3;
+pub(super) const MAX_RETRIES: u32 = 3;
 const DEFAULT_RETRY_AFTER_SECS: u64 = 5;
 /// Maximum backoff duration in seconds (cap exponential backoff).
 const MAX_BACKOFF_SECS: u64 = 300;
@@ -78,15 +78,15 @@ async fn extract_retry_after(response: Response) -> u64 {
 }
 
 /// Exponential backoff `base * 2^(attempt-1)`, saturating and capped.
-fn backoff_secs(base: u64, attempt: u32) -> u64 {
+pub(super) fn backoff_secs(base: u64, attempt: u32) -> u64 {
     let factor = 1u64
         .checked_shl(attempt.saturating_sub(1))
         .unwrap_or(u64::MAX);
     base.saturating_mul(factor).min(MAX_BACKOFF_SECS)
 }
 
-fn is_transient_error(err: &reqwest::Error) -> bool {
-    err.is_timeout() || err.is_connect()
+pub(super) fn is_transient_error(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect() || err.is_body() || err.is_decode()
 }
 
 /// Extract a normalized operation name from a URL path.
@@ -198,19 +198,17 @@ pub async fn call_with_retry(request: Request) -> Result<Response, CacheClientEr
 /// GET a download resource from TFCS (cache hit download).
 ///
 /// `normalized` is forwarded to TFCS as a `?normalized=` query parameter.
-pub async fn cache_download(
+pub fn cache_download_request(
     object_id: u64,
     object_type: &str,
     user_id: Option<i64>,
     normalized: bool,
-) -> Result<Response, CacheClientError> {
+) -> Result<Request, CacheClientError> {
     let path = format!("/api/v1/download/{object_id}/{object_type}/");
     let builder = build_request(reqwest::Method::GET, &path, user_id)
         .query(&[("normalized", normalized)])
-        .timeout(DOWNLOAD_TOTAL_TIMEOUT);
-    let request = builder.build()?;
-
-    call_with_retry(request).await
+        .timeout(request_timeout());
+    Ok(builder.build()?)
 }
 
 #[derive(Debug)]

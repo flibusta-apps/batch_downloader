@@ -3,7 +3,6 @@ use std::fmt;
 use base64::{engine::general_purpose, Engine};
 use reqwest::StatusCode;
 use smartstring::alias::String as SmartString;
-use tracing::log;
 
 use super::{cache_client, utils::response_to_tempfile};
 
@@ -75,31 +74,64 @@ pub async fn download(
     user_id: Option<i64>,
     normalized: bool,
 ) -> Result<(std::fs::File, String), Box<dyn std::error::Error + Send + Sync>> {
-    let response = cache_client::cache_download(book_id, &file_type, user_id, normalized).await?;
+    let request = cache_client::cache_download_request(book_id, &file_type, user_id, normalized)?;
+    download_request(request).await
+}
 
-    match response.status() {
-        StatusCode::OK => {}
-        // 429 is handled by cache_client::cache_download returning
-        // CacheClientError::RateLimited which propagates up as-is.
-        status => {
-            return Err(Box::new(DownloadError {
-                status_code: status,
-            }));
-        }
-    };
+async fn download_request(
+    request: reqwest::Request,
+) -> Result<(std::fs::File, String), Box<dyn std::error::Error + Send + Sync>> {
+    for attempt in 1..=cache_client::MAX_RETRIES {
+        let response = cache_client::call_with_retry(
+            request
+                .try_clone()
+                .ok_or(cache_client::CacheClientError::CannotCloneRequest)?,
+        )
+        .await?;
 
-    let mut response = response;
-    let filename = extract_filename(response.headers())?;
+        match response.status() {
+            StatusCode::OK => {}
+            // Missing books are terminal skips, never retried.
+            StatusCode::NOT_FOUND | StatusCode::NO_CONTENT => {
+                return Err(Box::new(DownloadError {
+                    status_code: response.status(),
+                }));
+            }
+            // 429 is handled by cache_client::cache_download returning
+            // CacheClientError::RateLimited which propagates up as-is.
+            status => {
+                return Err(Box::new(DownloadError {
+                    status_code: status,
+                }));
+            }
+        };
 
-    let output_file = match response_to_tempfile(&mut response).await {
-        Ok(v) => v,
-        Err(err) => {
-            log::error!("Error: {}", err);
-            return Err(err);
-        }
-    };
+        let mut response = response;
+        let filename = extract_filename(response.headers())?;
 
-    Ok((output_file.0, filename))
+        let output_file = match response_to_tempfile(&mut response).await {
+            Ok(v) => v,
+            Err(err) => {
+                if attempt < cache_client::MAX_RETRIES
+                    && err
+                        .downcast_ref::<reqwest::Error>()
+                        .is_some_and(cache_client::is_transient_error)
+                {
+                    // The failed anonymous file is dropped by response_to_tempfile;
+                    // retry a complete GET into a fresh file, never append bytes.
+                    tokio::time::sleep(std::time::Duration::from_secs(cache_client::backoff_secs(
+                        1, attempt,
+                    )))
+                    .await;
+                    continue;
+                }
+                return Err(err);
+            }
+        };
+
+        return Ok((output_file.0, filename));
+    }
+    unreachable!("bounded retry loop always returns on the last attempt")
 }
 
 #[cfg(test)]
@@ -107,6 +139,72 @@ mod tests {
     use super::{extract_filename, sanitize_filename};
     use base64::{engine::general_purpose, Engine};
     use reqwest::header::{HeaderMap, HeaderValue};
+
+    async fn serve_responses(
+        responses: Vec<&'static str>,
+    ) -> (reqwest::Request, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        crate::config::test_support::ensure_test_env();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/book", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for response in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0; 4096];
+                let mut received = 0;
+                while !buf[..received].windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let count = socket.read(&mut buf[received..]).await.unwrap();
+                    assert!(count > 0, "request ended before headers");
+                    received += count;
+                }
+                socket.write_all(response.as_bytes()).await.unwrap();
+                socket.shutdown().await.unwrap();
+            }
+        });
+        (
+            super::cache_client::CLIENT.get(url).build().unwrap(),
+            server,
+        )
+    }
+
+    #[tokio::test]
+    async fn truncated_body_retries_into_fresh_file() {
+        use std::io::Read;
+        let (request, server) = serve_responses(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nx-filename-b64: Ym9vay5mYjI=\r\nConnection: close\r\n\r\nbad",
+            "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nx-filename-b64: Ym9vay5mYjI=\r\nConnection: close\r\n\r\ngood",
+        ]).await;
+        let (mut file, filename) = super::download_request(request).await.unwrap();
+        let mut body = String::new();
+        file.read_to_string(&mut body).unwrap();
+        assert_eq!(body, "good");
+        assert_eq!(filename, "book.fb2");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn truncated_body_retries_are_bounded() {
+        let (request, server) = serve_responses(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nx-filename-b64: Ym9vay5mYjI=\r\nConnection: close\r\n\r\nbad";
+            super::cache_client::MAX_RETRIES as usize
+        ]).await;
+        let error = super::download_request(request).await.unwrap_err();
+        assert!(error.downcast_ref::<reqwest::Error>().is_some());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_books_are_not_retried() {
+        for response in [
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n",
+        ] {
+            let (request, server) = serve_responses(vec![response]).await;
+            let error = super::download_request(request).await.unwrap_err();
+            assert!(error.downcast_ref::<super::DownloadError>().is_some());
+            server.await.unwrap();
+        }
+    }
 
     #[test]
     fn missing_header_is_err() {

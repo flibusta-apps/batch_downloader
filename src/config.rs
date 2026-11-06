@@ -45,6 +45,7 @@ pub struct Config {
 
     pub cache_api_key: String,
     pub cache_url: String,
+    pub cache_request_timeout_secs: u64,
 
     /// Optional: Sentry is disabled when unset/empty.
     pub sentry_dsn: Option<String>,
@@ -61,14 +62,20 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Config {
+        let cache_request_timeout_secs = get_number("CACHE_REQUEST_TIMEOUT_SECS", 900u64, 1);
+        assert!(
+            cache_request_timeout_secs <= u64::MAX - 60,
+            "CACHE_REQUEST_TIMEOUT_SECS must leave room for the 60s watchdog margin"
+        );
         Config {
             api_key: get_secret("API_KEY"),
 
             library_api_key: get_secret("LIBRARY_API_KEY"),
-            library_url: get_env("LIBRARY_URL"),
+            library_url: normalize_base(&get_env("LIBRARY_URL")),
 
             cache_api_key: get_secret("CACHE_API_KEY"),
-            cache_url: get_env("CACHE_URL"),
+            cache_url: normalize_base(&get_env("CACHE_URL")),
+            cache_request_timeout_secs,
 
             sentry_dsn: std::env::var("SENTRY_DSN")
                 .ok()
@@ -86,6 +93,20 @@ impl Config {
 }
 
 pub static CONFIG: Lazy<Config> = Lazy::new(Config::load);
+
+fn normalize_base(url: &str) -> String {
+    url.trim_end_matches('/').to_string()
+}
+
+#[cfg(test)]
+#[test]
+fn base_urls_have_no_trailing_slashes() {
+    assert_eq!(
+        normalize_base("https://example.org/api///"),
+        "https://example.org/api"
+    );
+    assert_eq!(normalize_base("https://example.org"), "https://example.org");
+}
 
 /// Path of the finished archive for a task token.
 pub fn archive_path(token: &str) -> PathBuf {
