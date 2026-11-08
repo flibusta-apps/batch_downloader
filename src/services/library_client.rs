@@ -136,3 +136,25 @@ pub async fn get_author(id: u32) -> Result<Author, Box<dyn std::error::Error + S
 pub async fn get_sequence(id: u32) -> Result<Sequence, Box<dyn std::error::Error + Send + Sync>> {
     _make_request(&format!("/api/v1/sequences/{id}"), vec![]).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_language_query_preserves_encoding_and_pagination() {
+        let mut params =
+            get_allowed_langs_params(smallvec::smallvec!["ru".into(), "en & fr".into()]);
+        params.push(("page", "2".into()));
+        params.push(("size", PAGE_SIZE.into()));
+        let request = reqwest::Client::new()
+            .get("http://localhost/books?existing=1")
+            .query(&params)
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.url().query(),
+            Some("existing=1&allowed_langs=ru&allowed_langs=en+%26+fr&page=2&size=50")
+        );
+    }
+}
