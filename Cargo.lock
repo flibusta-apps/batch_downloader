@@ -344,7 +344,7 @@ dependencies = [
  "md5",
  "moka",
  "once_cell",
- "rand 0.9.5",
+ "rand 0.10.3",
  "reqwest",
  "sentry",
  "sentry-tracing",
